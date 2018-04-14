@@ -8,7 +8,11 @@ using UnityEngine.Rendering;
 public enum InfluenceMode
 {
 	Propagation = 0,
-
+	NormalizationPropagation,
+	Search,
+	VisibleToSpot,
+	Visibility,
+	OpennessClosestWall
 }
 
 public class Pair<T1, T2>
@@ -33,11 +37,12 @@ public class NavMesh_CellGenerator : MonoBehaviour
     public float poissonTolerance = 0.5f;                       // What is the minimum distance apart each poisson point should be
     public float lineWidth = 0.01f;                             // How wide to draw all the lines in the scene
     public SortedCellList cells;                                // List of all existing cells within the scene -- will be used for the influence map calculations
-	public float stepTime = 0.1f;
-	float currentTime = 0.0f;
-	public InfluenceMode mode = InfluenceMode.Propagation;
-	public float DecayFactor = 0.2f;
-	public float GrowthFactor = 0.3f;
+	public float stepTime = 0.1f;								// How long between propagation calculations
+	float currentTime = 0.0f;									// Timer for tracking propagation step time
+	public InfluenceMode Mode = InfluenceMode.Propagation;		// Current mode for the influence map
+	public float DecayFactor = 0.2f;							// Decay factor for propagation formula
+	public float GrowthFactor = 0.3f;                           // Growth factor for propagation formula
+	public bool ShouldRenderNeighborLines = false;				// Determines whether or not voronoi neighbor lines should be rendered
 
 	/// <summary>
 	/// Represents one edge of a given Voronoi region
@@ -141,6 +146,16 @@ public class NavMesh_CellGenerator : MonoBehaviour
 			ColorDot();
 		}
 
+		public void NormalizeAndApplyNewInfluence(float maxNeg, float maxPos)
+		{
+			if (newInfluenceValue < 0.0f)
+				newInfluenceValue /= maxNeg;
+			else
+				newInfluenceValue /= maxPos;
+
+			ApplyNewInfluence();
+		}
+
 		public void CalculateCurrentInfluence()
 		{
 			float maxInfluence = 0.0f;
@@ -151,6 +166,11 @@ public class NavMesh_CellGenerator : MonoBehaviour
 			}
 
 			newInfluenceValue = CalculateNewInfluence(maxInfluence);
+		}
+
+		public float GetNewInfluenceValue()
+		{
+			return newInfluenceValue;
 		}
 	}
 
@@ -489,6 +509,37 @@ public class NavMesh_CellGenerator : MonoBehaviour
 				cell.ApplyNewInfluence();
 			}
 		}
+
+		/// <summary>
+		/// Iterates through the cells and calls CalculateCurrentInfluence
+		/// Once all cells have finished calculating influence, 
+		/// it will iterate through the cells and call ApplyNewInfluence
+		/// Then, finds the maximum positve and negative values of all cells and normalizes their influence values
+		/// </summary>
+		public void NormalizePropogateCells()
+		{
+			float maxNeg = 0.0f;
+			float maxPos = 0.0f;
+
+			foreach (Cell cell in cells)
+			{
+				cell.CalculateCurrentInfluence();
+				float ival = cell.GetNewInfluenceValue();
+				if (ival < 0.0f)
+					maxNeg = ival < maxNeg ? ival : maxNeg;
+				else
+					maxPos = ival > maxPos ? ival : maxPos;
+			}
+			maxNeg *= -1.0f;
+			if (maxPos == 0.0f) maxPos = 1.0f;
+			if (maxNeg == 0.0f) maxNeg = 1.0f;
+
+
+			foreach (Cell cell in cells)
+			{
+				cell.NormalizeAndApplyNewInfluence(maxNeg, maxPos);
+			}
+		}
 	}
 
 
@@ -742,7 +793,7 @@ public class NavMesh_CellGenerator : MonoBehaviour
             }
             lineRenderer.SetPositions(linePositions);
 
-            lineRenderer.enabled = true;
+            lineRenderer.enabled = ShouldRenderNeighborLines;
             lineRenderer.widthMultiplier = lineWidth;
             lineRenderer.endWidth = lineWidth / 4;
             cell.adjacentCells.Add(new Pair<Cell, float>(c, Vector3.Distance(c.site, cell.site))); //Add
@@ -793,12 +844,17 @@ public class NavMesh_CellGenerator : MonoBehaviour
         }
 
 		cells.AssignIndices();
+
+		if (Mode == InfluenceMode.OpennessClosestWall)
+		{
+
+		}
     }
 
     // Update is called once per frame
     void Update()
     {
-		if (mode.Equals(InfluenceMode.Propagation))
+		if (Mode.Equals(InfluenceMode.Propagation))
 		{
 			currentTime += Time.deltaTime;
 
@@ -808,5 +864,16 @@ public class NavMesh_CellGenerator : MonoBehaviour
 				currentTime = 0.0f;
 			}
 		}
-    }
+		else if (Mode.Equals(InfluenceMode.NormalizationPropagation))
+		{
+			currentTime += Time.deltaTime;
+
+			if (currentTime >= stepTime)
+			{
+				cells.PropagateCells();
+				cells.NormalizePropogateCells();
+				currentTime = 0.0f;
+			}
+		}
+	}
 }
