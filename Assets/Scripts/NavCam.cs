@@ -12,7 +12,7 @@ public class NavCam : MonoBehaviour
 
 	void Start()
 	{
-		Cursor.lockState = CursorLockMode.Confined;
+		Cursor.lockState = CursorLockMode.Locked;
 	}
 
 	void Update()

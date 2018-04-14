@@ -86,12 +86,19 @@ public class NavMesh_CellGenerator : MonoBehaviour
         GameObject linePrefab;          // 
 		NavMesh_CellGenerator parent;	// Parent object, passed to the instantiated Dot GameObject
 
+		private Color LerpColor(float t, Color otherColor)
+		{
+			return (1.0f - t) * Color.white + t * otherColor;
+		}
+
         private void ColorDot()
         {
             if (influenceValue < 0.0f)
-                dotRenderer.material.SetColor("_Color", Math.Abs(influenceValue) * Color.blue);
-            else
-                dotRenderer.material.SetColor("_Color", influenceValue * Color.red);
+				dotRenderer.material.SetColor("_Color", LerpColor(Math.Abs(influenceValue), Color.blue));
+				//dotRenderer.material.SetColor("_Color", Math.Abs(influenceValue) * Color.blue);
+			else
+				dotRenderer.material.SetColor("_Color", LerpColor(influenceValue, Color.red));
+				//dotRenderer.material.SetColor("_Color", influenceValue * Color.red);
         }
 
 		private float GetInfluenceFromNeighbor(Pair<Cell, float> neighbor)
@@ -138,13 +145,11 @@ public class NavMesh_CellGenerator : MonoBehaviour
 
 		public void CalculateCurrentInfluence()
 		{
-			//List<float> influences = new List<float>(adjacentCells.Count);
 			float maxInfluence = 0.0f;
 			for(int i = 0; i < adjacentCells.Count; ++i)
 			{
 				float influence = GetInfluenceFromNeighbor(adjacentCells[i]);
 				maxInfluence = Math.Abs(maxInfluence) < Math.Abs(influence) ? influence : maxInfluence;
-				//influences[i] = GetInfluenceFromNeighbor(adjacentCells[i]);
 			}
 
 			newInfluenceValue = CalculateNewInfluence(maxInfluence);
