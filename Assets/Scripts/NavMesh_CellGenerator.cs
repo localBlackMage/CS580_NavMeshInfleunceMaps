@@ -163,11 +163,16 @@ public class NavMesh_CellGenerator : MonoBehaviour
 			currentFadeTime = influenceValue * parent.MaxFadeTimer;
 		}
 
+		/// <summary>
+		/// For all neighboring cells, if the cell's influenceValue is less than the new
+		/// influence value, that cell's SetInfluenceValueAndResetTimer method is called
+		/// </summary>
+		/// <param name="_influenceValue">influenceValue to pass to neighboring cells</param>
 		public void SetNeighborInfluenceValuesAndResetTimer(float _influenceValue)
 		{
 			foreach (Pair<Cell, float> neighbor in adjacentCells)
 			{
-				if (neighbor.first.influenceValue <= 0.0f)
+				if (neighbor.first.influenceValue < _influenceValue)
 					neighbor.first.SetInfluenceValueAndResetTimer(_influenceValue);
 			}
 		}
