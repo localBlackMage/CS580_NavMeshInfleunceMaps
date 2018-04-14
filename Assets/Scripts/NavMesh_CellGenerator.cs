@@ -42,60 +42,44 @@ public class NavMesh_CellGenerator : MonoBehaviour
 	public InfluenceMode Mode = InfluenceMode.Propagation;		// Current mode for the influence map
 	public float DecayFactor = 0.2f;							// Decay factor for propagation formula
 	public float GrowthFactor = 0.3f;                           // Growth factor for propagation formula
+	public float MaxFadeTimer = 4.0f;							// How many seconds it'll take for a given cell to fade it's influence from 1 to 0, value cannot be 0
 	public bool ShouldRenderNeighborLines = false;				// Determines whether or not voronoi neighbor lines should be rendered
-
-	/// <summary>
-	/// Represents one edge of a given Voronoi region
-	/// </summary>
-	public class Edge
-    {
-        public Vector3 start, end;      // Start and end of this edge
-        public GameObject line;         // Line Renderer to visually display this edge in the scene
-
-        public Edge(Vector3 _start, Vector3 _end, GameObject _linePrefab, float _lineWidth, Vector3 _normal, Color _color)
-        {
-            start = _start;
-            end = _end;
-
-            line = Instantiate(_linePrefab);
-            LineRenderer lineRenderer = line.GetComponent<LineRenderer>();
-            lineRenderer.SetPositions(new Vector3[2] { start, end });
-            lineRenderer.enabled = true;
-            lineRenderer.widthMultiplier = _lineWidth;
-            lineRenderer.material.SetColor("_Color", _color);
-
-            Transform colliderTransform = line.GetComponentInChildren<Transform>();
-
-            colliderTransform.localPosition = ((end - start) / 2.0f) + start;
-            colliderTransform.rotation = Quaternion.LookRotation(end - start, _normal);
-
-            BoxCollider colliderBoxCollider = line.GetComponentInChildren<BoxCollider>();
-            colliderBoxCollider.size = new Vector3(0.025f, 0.025f, (end - start).magnitude);
-        }
-    }
 
     /// <summary>
     /// Represents a single Voronoi region
     /// </summary>
     public class Cell
     {
-        public List<Edge> edges;        // All edges belonging to this Voronoi region
         public Vector3 site;            // The origin of this Voronoi region
 
         public List<Pair<Cell, float>> adjacentCells; //A list of adjacent cells and the distances to them
 
+		float currentFadeTime;			// Current time from MaxFadeTimer to 0 used to interpolate influence color
 		float newInfluenceValue;		// Newly calculated influence value
         float influenceValue;			// This Voronoi region's current influence (-1 to 1)
         GameObject dot;                 // Prefab PoissonDot object, should have a PoissonDot component attached
-        Renderer dotRenderer;           // 
-        GameObject linePrefab;          // 
+        Renderer dotRenderer;           // Renderer component from the PoissonDot object spawned upon this cell's creation
 		NavMesh_CellGenerator parent;	// Parent object, passed to the instantiated Dot GameObject
 
+		/// <summary>
+		/// Given a t value, performs linear interpolation between the color white and the given color
+		/// </summary>
+		/// <param name="t">Value between 0 and 1</param>
+		/// <param name="otherColor">Color to interpolate with</param>
+		/// <returns></returns>
 		private Color LerpColor(float t, Color otherColor)
 		{
 			return (1.0f - t) * Color.white + t * otherColor;
 		}
 
+		/// <summary>
+		/// If this cell's influenceValue is greater than or equal to 0, calls LerpColor with the 
+		/// influenceValue and Red
+		/// Else, calls LerpColor with the absolute influenceValue and Blue
+		/// 
+		/// Either result in this cell's dotRenderer having it's material color changed to the result of 
+		/// LerpColor
+		/// </summary>
         private void ColorDot()
         {
             if (influenceValue < 0.0f)
@@ -104,21 +88,41 @@ public class NavMesh_CellGenerator : MonoBehaviour
 				dotRenderer.material.SetColor("_Color", LerpColor(influenceValue, Color.red));
         }
 
+		/// <summary>
+		/// For a given neighbor cell, calculates it's influence value using a decay formula and the 
+		/// NavMesh_CellGenerator's DecayFactor
+		/// </summary>
+		/// <param name="neighbor">Pair containing the neighbor Cell and the distance from that cell to this one</param>
+		/// <returns>The newly intrpolated influence value from the neighbor cell</returns>
 		private float GetInfluenceFromNeighbor(Pair<Cell, float> neighbor)
 		{
 			return neighbor.first.influenceValue * (float)(Math.Exp(-neighbor.second * parent.DecayFactor));
 		}
 
+		/// <summary>
+		/// Private method
+		/// Interpolates an influence value utilizing NavMesh_CellGenerator's GrowthValue and the given maxInfluence
+		/// </summary>
+		/// <param name="maxInfluence">Maximum influence from all neighboring cells</param>
+		/// <returns>The newly interpolated influence value for this cell</returns>
 		private float CalculateNewInfluence(float maxInfluence)
 		{
 			return (1.0f - parent.GrowthFactor) * influenceValue + parent.GrowthFactor * maxInfluence;
 		}
 
-        public Cell(Vector3 _site, Quaternion _rotation, GameObject _dotPrefab, GameObject _linePrefab, NavMesh_CellGenerator _parent)
+		/// <summary>
+		/// Spawns a new Cell object
+		/// A new Dot will be instantiated at the given site with the given rotation
+		/// </summary>
+		/// <param name="_site">The world position of this cell</param>
+		/// <param name="_rotation">The rotation of this cell</param>
+		/// <param name="_dotPrefab">The Prefab Dot to be spawned</param>
+		/// <param name="_parent">NavMesh_CellGenerator object that this cell belongs to</param>
+		public Cell(Vector3 _site, Quaternion _rotation, GameObject _dotPrefab, NavMesh_CellGenerator _parent)
         {
             site = _site;
-            linePrefab = _linePrefab;
             influenceValue = 0.0f;
+			currentFadeTime = 0.0f;
 
 			parent = _parent;
 
@@ -129,23 +133,61 @@ public class NavMesh_CellGenerator : MonoBehaviour
             adjacentCells = new List<Pair<Cell, float>>();
         }
 
+		/// <summary>
+		/// Given an index value, calls this cell's dot object's PoissonDot.SetParentAndIndex with 
+		/// this cell's parent and the given index
+		/// </summary>
+		/// <param name="index">An index into NavMesh_CellGenerator's cells list</param>
 		public void SetIndex(int index)
 		{
 			dot.GetComponent<PoissonDot>().SetParentAndIndex(parent, index);
 		}
 
+		/// <summary>
+		/// Sets this cell's influenceValue to the given value and calls ColorDot
+		/// </summary>
+		/// <param name="_influenceValue">This cell's new influenceValue</param>
 		public void SetInfluenceValue(float _influenceValue)
 		{
 			influenceValue = _influenceValue;
 			ColorDot();
 		}
+		
+		/// <summary>
+		/// Resets currentFadeTime to MaxFadeTimer and sets influenceValue to the given value
+		/// </summary>
+		/// <param name="_influenceValue">This cell's new influenceValue</param>
+		public void SetInfluenceValueAndResetTimer(float _influenceValue)
+		{
+			influenceValue = _influenceValue;
+			currentFadeTime = influenceValue * parent.MaxFadeTimer;
+		}
 
+		public void SetNeighborInfluenceValuesAndResetTimer(float _influenceValue)
+		{
+			foreach (Pair<Cell, float> neighbor in adjacentCells)
+			{
+				if (neighbor.first.influenceValue <= 0.0f)
+					neighbor.first.SetInfluenceValueAndResetTimer(_influenceValue);
+			}
+		}
+
+		/// <summary>
+		/// Sets this cell's influenceValue to this cell's newInfluenceValue and calls ColorDot
+		/// </summary>
 		public void ApplyNewInfluence()
 		{
 			influenceValue = newInfluenceValue;
 			ColorDot();
 		}
 
+		/// <summary>
+		/// Given the maximum negative and positive values of all cells, 
+		/// this method will divide this cell's newInfluenceValue by the 
+		/// respective maximum before calling ApplyNewInfluence
+		/// </summary>
+		/// <param name="maxNeg">Maximum negative value among all cells (value should be positive)</param>
+		/// <param name="maxPos">Maximum positive value among all cells</param>
 		public void NormalizeAndApplyNewInfluence(float maxNeg, float maxPos)
 		{
 			if (newInfluenceValue < 0.0f)
@@ -156,6 +198,9 @@ public class NavMesh_CellGenerator : MonoBehaviour
 			ApplyNewInfluence();
 		}
 
+		/// <summary>
+		/// Used in propagation, uses a decay + growth formula to calculate this cell's newInfluenceValue
+		/// </summary>
 		public void CalculateCurrentInfluence()
 		{
 			float maxInfluence = 0.0f;
@@ -168,9 +213,24 @@ public class NavMesh_CellGenerator : MonoBehaviour
 			newInfluenceValue = CalculateNewInfluence(maxInfluence);
 		}
 
+		/// <summary>
+		/// Returns newInfluenceValue
+		/// </summary>
+		/// <returns>This cell's newInfluenceValue field, a float value from -1 to 1</returns>
 		public float GetNewInfluenceValue()
 		{
 			return newInfluenceValue;
+		}
+
+		/// <summary>
+		/// Decrements currentFadeTime and sets influenceValue to (currentFadeTime / MaxFadeTimer) before calling ColorDot
+		/// </summary>
+		/// <param name="deltaTime">Time since last call</param>
+		public void FadeInfluence(float deltaTime) {
+			currentFadeTime -= deltaTime;
+			if (currentFadeTime < 0) currentFadeTime = 0.0f;
+			influenceValue = currentFadeTime / parent.MaxFadeTimer;
+			ColorDot();
 		}
 	}
 
@@ -214,8 +274,6 @@ public class NavMesh_CellGenerator : MonoBehaviour
             }
             lineRenderer.SetPositions(linePositions);
 
-            //lineRenderer.startColor = Color.red;
-            //lineRenderer.endColor = Color.red;
             lineRenderer.enabled = true;
             lineRenderer.widthMultiplier = lineWidth;
 
@@ -265,52 +323,6 @@ public class NavMesh_CellGenerator : MonoBehaviour
             float f3 = 1.0f - f1 - f2;
 
             return (v1 * f1) + (v2 * f2) + (v3 * f3);
-        }
-
-        /// <summary>
-        /// Assumes poissonCells are already set
-        /// This method will create all Voronoi regions within this triangle
-        /// </summary>
-        public void CreateVoronoiRegions()
-        {
-            for (int outer = 0; outer < poissonCells.Count; ++outer)
-            {
-                for (int inner = 0; inner < poissonCells.Count; ++inner)
-                {
-                    if (inner == outer) continue;
-                    Vector3 midPoint = (poissonCells[inner].site - poissonCells[outer].site) / 2.0f + poissonCells[outer].site;
-                    Vector3 perp = Vector3.Cross(poissonCells[inner].site - poissonCells[outer].site, normal);
-
-                    RaycastHit hit;
-                    if (Physics.Raycast(midPoint, perp, out hit))
-                    {
-                        GameObject endPoint = Instantiate(dotPrefab, hit.point, new Quaternion());
-                        endPoint.GetComponent<Renderer>().material.SetColor("_Color", Color.cyan);
-
-                    }
-                    if (Physics.Raycast(midPoint, -perp, out hit))
-                    {
-                        GameObject endPoint = Instantiate(dotPrefab, hit.point, new Quaternion());
-                        endPoint.GetComponent<Renderer>().material.SetColor("_Color", Color.cyan);
-                    }
-                }
-            }
-
-            float oneEighth = 1.0f / 8.0f;
-            for (int outer = 0; outer < poissonCells.Count; ++outer)
-            {
-                for (int inner = 0; inner < poissonCells.Count; ++inner)
-                {
-                    if (inner == outer) continue;
-                    Vector3 midPoint = (poissonCells[inner].site - poissonCells[outer].site) / 2.0f + poissonCells[outer].site;
-                    Vector3 perp = Vector3.Cross(poissonCells[inner].site - poissonCells[outer].site, normal);
-                    perp = perp.normalized * oneEighth;
-                    new Edge(midPoint, midPoint + perp, linePrefab, lineWidth, normal, Color.yellow);
-
-                    new Edge(poissonCells[outer].site, midPoint, linePrefab, lineWidth, normal, inner > outer ? Color.green : Color.cyan);
-                    new Edge(midPoint, midPoint + (normal / 4.0f), linePrefab, lineWidth, normal, Color.magenta);
-                }
-            }
         }
     }
 
@@ -540,6 +552,18 @@ public class NavMesh_CellGenerator : MonoBehaviour
 				cell.NormalizeAndApplyNewInfluence(maxNeg, maxPos);
 			}
 		}
+
+		/// <summary>
+		/// Iterates through the cells and calls FadeInfluence
+		/// </summary>
+		/// <param name="deltaTime">Time since last call</param>
+		public void FadeInfluenceOnCells(float deltaTime)
+		{
+			foreach (Cell cell in cells)
+			{
+				cell.FadeInfluence(deltaTime);
+			}
+		}
 	}
 
 
@@ -587,18 +611,10 @@ public class NavMesh_CellGenerator : MonoBehaviour
 
             if (!tooClose)
             {
-                cells.AddCell(new Cell(point, transform.rotation, poissonDotPrefab, linePrefab, this));
+                cells.AddCell(new Cell(point, transform.rotation, poissonDotPrefab, this));
                 pointsFinal.Add(point);
             }
         }
-
-        //// For all the selected points, generate Voronoi regions
-        //foreach (Vector3 point in pointsFinal)
-        //{
-        //    triangle.poissonCells.Add(new Cell(point, transform.rotation, poissonDotPrefab, linePrefab));
-        //}
-        //
-        //triangle.CreateVoronoiRegions();
     }
 
     bool PointWithinTriangleCircumference(Vector3 p1, Vector3 p2, Vector3 p3, Vector3 v)
@@ -810,10 +826,33 @@ public class NavMesh_CellGenerator : MonoBehaviour
 		cells.GetCell(index).SetInfluenceValue(influence);
 	}
 
-    // Use this for initialization
-    void Start()
+	/// <summary>
+	/// Given an index into cells, sets the Cell's influence value to maximum
+	/// </summary>
+	/// <param name="index">Index into cells List</param>
+	public void InFieldOfView(int index)
+	{
+		cells.GetCell(index).SetInfluenceValueAndResetTimer(1.0f);
+		cells.GetCell(index).SetNeighborInfluenceValuesAndResetTimer(0.5f);
+	}
+
+	// Use this for initialization
+	void Start()
     {
         cells = new SortedCellList();
+
+
+		/// Cycling through all child objects, finding OffMeshLinks
+		/// Hope is to connect our Cells together via the OffMeshLinks
+		//foreach (Transform child in transform)
+		//{
+		//	OffMeshLink offMeshLink = child.GetComponent<OffMeshLink>();
+		//	if (offMeshLink && offMeshLink.enabled)
+		//	{
+		//		NavMesh.areas
+		//		offMeshLink.area
+		//	}
+		//}
 
         // Get all NavMesh information
         NavMeshTriangulation tris = NavMesh.CalculateTriangulation();
@@ -854,26 +893,30 @@ public class NavMesh_CellGenerator : MonoBehaviour
     // Update is called once per frame
     void Update()
     {
-		if (Mode.Equals(InfluenceMode.Propagation))
+		currentTime += Time.deltaTime;
+		if (currentTime >= stepTime)
 		{
-			currentTime += Time.deltaTime;
-
-			if (currentTime >= stepTime)
+			switch (Mode)
 			{
-				cells.PropagateCells();
-				currentTime = 0.0f;
+				case InfluenceMode.Propagation:
+				{
+					cells.PropagateCells();
+					break;
+				}
+				case InfluenceMode.NormalizationPropagation:
+				{
+					cells.PropagateCells();
+					cells.NormalizePropogateCells();
+					break;
+				}
+				case InfluenceMode.Visibility:
+				{
+					cells.FadeInfluenceOnCells(stepTime);
+					break;
+				}
 			}
-		}
-		else if (Mode.Equals(InfluenceMode.NormalizationPropagation))
-		{
-			currentTime += Time.deltaTime;
 
-			if (currentTime >= stepTime)
-			{
-				cells.PropagateCells();
-				cells.NormalizePropogateCells();
-				currentTime = 0.0f;
-			}
+			currentTime = 0.0f;
 		}
 	}
 }

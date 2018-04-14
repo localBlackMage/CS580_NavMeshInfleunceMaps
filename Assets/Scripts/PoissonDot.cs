@@ -13,6 +13,11 @@ public class PoissonDot : MonoBehaviour {
 		index = _index;
 	}
 
+	public void InFieldOfView()
+	{
+		parent.InFieldOfView(index);
+	}
+
 	void OnMouseOver()
 	{
 		if (Input.GetMouseButtonUp(0))
