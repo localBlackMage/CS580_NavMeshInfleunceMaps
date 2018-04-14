@@ -95,10 +95,8 @@ public class NavMesh_CellGenerator : MonoBehaviour
         {
             if (influenceValue < 0.0f)
 				dotRenderer.material.SetColor("_Color", LerpColor(Math.Abs(influenceValue), Color.blue));
-				//dotRenderer.material.SetColor("_Color", Math.Abs(influenceValue) * Color.blue);
 			else
 				dotRenderer.material.SetColor("_Color", LerpColor(influenceValue, Color.red));
-				//dotRenderer.material.SetColor("_Color", influenceValue * Color.red);
         }
 
 		private float GetInfluenceFromNeighbor(Pair<Cell, float> neighbor)
@@ -807,6 +805,7 @@ public class NavMesh_CellGenerator : MonoBehaviour
 			if (currentTime >= stepTime)
 			{
 				cells.PropagateCells();
+				currentTime = 0.0f;
 			}
 		}
     }
