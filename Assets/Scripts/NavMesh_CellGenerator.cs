@@ -246,6 +246,11 @@ public class Cell
 		influenceValue = wallInfluence;
 		ColorDot();
 	}
+
+	public Transform GetTransform()
+	{
+		return dot.transform;
+	}
 }
 
 /// <summary>
@@ -643,12 +648,20 @@ public class SortedCellList
 	/// </summary>
 	public void FindVisibilityInfluence()
 	{
+		int layerToCastOn = LayerMask.GetMask("BlockLoS");
 		for (int i = 0; i < cells.Count; ++i)
 		{
 			for (int j = 0; j < cells.Count; ++j)
 			{
 				if (i == j) continue;
+				Vector3 dir = cells[j].GetTransform().position - cells[i].GetTransform().position;
+				Ray ray = new Ray(cells[i].GetTransform().position, dir.normalized);
+				RaycastHit hit;
+				Physics.Raycast(ray, out hit, dir.magnitude, layerToCastOn);
+				if (hit.collider)
+				{
 
+				}
 			}
 		}
 	}
