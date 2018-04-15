@@ -3,6 +3,9 @@
 [Oo]bj/
 [Bb]uild/
 [Bb]uilds/
+CS580_Navmesh_InfluenceMaps_Data/
+CS580_Navmesh_InfluenceMaps.exe
+UnityPlayer.dll
 Assets/AssetStoreTools*
 
 # Visual Studio cache directory

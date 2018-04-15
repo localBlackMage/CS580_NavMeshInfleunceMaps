@@ -5,6 +5,7 @@ using UnityEngine;
 public class NavPlayer : MonoBehaviour {
 
 	public float cameraSensitivity = 90;
+	public float climbSpeed = 4;
 	public float normalMoveSpeed = 10;
 
 	private float rotationX = 0.0f;
@@ -38,8 +39,11 @@ public class NavPlayer : MonoBehaviour {
 			head.localRotation *= Quaternion.AngleAxis(0, Vector3.left);
 			head.localRotation *= Quaternion.AngleAxis(rotationZ, Vector3.forward);
 
-			transform.position += transform.forward * normalMoveSpeed * Input.GetAxis("Vertical") * Time.deltaTime;
-			transform.position += transform.right * normalMoveSpeed * Input.GetAxis("Horizontal") * Time.deltaTime;
+			transform.position += head.forward * normalMoveSpeed * Input.GetAxis("Vertical") * Time.deltaTime;
+			transform.position += head.right * normalMoveSpeed * Input.GetAxis("Horizontal") * Time.deltaTime;
+
+			if (Input.GetKey(KeyCode.E)) { transform.position += transform.up * climbSpeed * Time.deltaTime; }
+			if (Input.GetKey(KeyCode.Q)) { transform.position -= transform.up * climbSpeed * Time.deltaTime; }
 		}
 	}
 }

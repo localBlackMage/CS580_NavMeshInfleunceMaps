@@ -503,7 +503,7 @@ public class NavMesh_CellGenerator : MonoBehaviour
 		/// </summary>
 		public void AssignIndices()
 		{
-			for (int i = 0; i < cells.Count - 1; ++i)
+			for (int i = 0; i < cells.Count; ++i)
 			{
 				cells[i].SetIndex(i);
 			}
@@ -837,8 +837,11 @@ public class NavMesh_CellGenerator : MonoBehaviour
 	/// <param name="index">Index into cells List</param>
 	public void InFieldOfView(int index)
 	{
-		cells.GetCell(index).SetInfluenceValueAndResetTimer(1.0f);
-		cells.GetCell(index).SetNeighborInfluenceValuesAndResetTimer(0.5f);
+		if (Mode == InfluenceMode.Visibility)
+		{
+			cells.GetCell(index).SetInfluenceValueAndResetTimer(1.0f);
+			cells.GetCell(index).SetNeighborInfluenceValuesAndResetTimer(0.5f);
+		}
 	}
 
 	// Use this for initialization
