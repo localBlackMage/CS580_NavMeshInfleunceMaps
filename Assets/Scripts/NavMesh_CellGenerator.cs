@@ -41,7 +41,7 @@ public class Cell
 	float newInfluenceValue;        // Newly calculated influence value
 	float influenceValue;           // This Voronoi region's current influence (-1 to 1)
 	float wallInfluence;			// Stored influence value for closeness to a wall
-	GameObject dot;                 // Prefab PoissonDot object, should have a PoissonDot component attached
+	GameObject dot;                 // PoissonDot object, should have a PoissonDot component attached
 	Renderer dotRenderer;           // Renderer component from the PoissonDot object spawned upon this cell's creation
 	NavMesh_CellGenerator parent;   // Parent object, passed to the instantiated Dot GameObject
 
@@ -125,6 +125,12 @@ public class Cell
 	public void SetIndex(int index)
 	{
 		dot.GetComponent<PoissonDot>().SetParentAndIndex(parent, index);
+	}
+
+	public void MoveSiteVertically(Vector3 verticalOffset)
+	{
+		site += verticalOffset;
+		dot.transform.position = site;
 	}
 
 	/// <summary>
@@ -231,6 +237,15 @@ public class Cell
 	{
 		wallInfluence = _wallInfluence;
 	}
+
+	/// <summary>
+	/// 
+	/// </summary>
+	public void ApplyWallInfluence()
+	{
+		influenceValue = wallInfluence;
+		ColorDot();
+	}
 }
 
 /// <summary>
@@ -257,6 +272,7 @@ public class Triangle
 	{
 		const float samplesPerLength = 2.0f;
 		const float verticalOffset = 0.1f;
+		Vector3 verticalOffsetFinal = Vector3.up * verticalOffset;
 
 		line = UnityEngine.Object.Instantiate(linePrefab);
 		LineRenderer lineRenderer = line.GetComponent<LineRenderer>();
@@ -269,7 +285,7 @@ public class Triangle
 			linePositions[i] = Vector3.Lerp(start, end, (float)i / (samples - 1));
 			NavMeshHit hit;
 			NavMesh.SamplePosition(linePositions[i], out hit, 100, -1);
-			linePositions[i] = hit.position + Vector3.up * verticalOffset;
+			linePositions[i] = hit.position + verticalOffsetFinal;
 		}
 		lineRenderer.SetPositions(linePositions);
 
@@ -503,6 +519,13 @@ public class SortedCellList
 		}
 	}
 
+
+	public void RaiseCells(Vector3 verticalOffset)
+	{
+		foreach (Cell cell in cells)
+			cell.MoveSiteVertically(verticalOffset);
+	}
+
 	/// <summary>
 	/// For every cell contained within this list, calls cell.SetInfluenceValue with 0
 	/// </summary>
@@ -588,6 +611,7 @@ public class SortedCellList
 			float closestWallDist = (cell.site - walls[0].transform.position).sqrMagnitude;
 			for(int i = 1; i<walls.Length; ++i)
 			{
+
 				float thisWallDist = (cell.site - walls[i].transform.position).sqrMagnitude;
 				if (thisWallDist < closestWallDist)
 				{
@@ -595,8 +619,37 @@ public class SortedCellList
 					closestWallIndex = i;
 				}
 			}
-
+			closestWallDist = (float)Math.Sqrt((double)closestWallDist);
+			float iVal = 1.0f / (closestWallDist * closestWallDist);
+			Mathf.Clamp(iVal, 0.0f, 1.0f);
+			Debug.Log("Closest Dist: " + closestWallDist + " :: iVal: " + iVal);
 			cell.SetWallInfluence(1.0f);
+		}
+	}
+
+	/// <summary>
+	/// 
+	/// </summary>
+	public void ApplyWallInfluences()
+	{
+		foreach (Cell cell in cells)
+		{
+			cell.ApplyWallInfluence();
+		}
+	}
+
+	/// <summary>
+	/// 
+	/// </summary>
+	public void FindVisibilityInfluence()
+	{
+		for (int i = 0; i < cells.Count; ++i)
+		{
+			for (int j = 0; j < cells.Count; ++j)
+			{
+				if (i == j) continue;
+
+			}
 		}
 	}
 }
@@ -617,6 +670,8 @@ public class NavMesh_CellGenerator : MonoBehaviour
 	public float GrowthFactor = 0.3f;                           // Growth factor for propagation formula
 	public float MaxFadeTimer = 4.0f;							// How many seconds it'll take for a given cell to fade it's influence from 1 to 0, value cannot be 0
 	public bool ShouldRenderNeighborLines = false;              // Determines whether or not voronoi neighbor lines should be rendered
+	public float VerticalOffset = 0.15f;
+	Vector3 verticalOffsetFinal;
 	public float StepTime = 0.1f;                               // How long between propagation calculations
 	float CurrentTime = 0.0f;                                   // Timer for tracking propagation step time
 
@@ -633,8 +688,8 @@ public class NavMesh_CellGenerator : MonoBehaviour
         List<Vector3> pointsFinal = new List<Vector3>();    // Remaining points that have been filtered via the tolerance amount
         triangle.poissonCells = new List<Cell>();
 
-        // Generate random points within the triangle
-        for (int idx = 0; idx < numPoints; ++idx)
+		// Generate random points within the triangle
+		for (int idx = 0; idx < numPoints; ++idx)
         {
             points.Add(triangle.RandomPoint());
             NavMeshHit hit;
@@ -844,9 +899,8 @@ public class NavMesh_CellGenerator : MonoBehaviour
         foreach (Cell c in finalCells)
         {
             const float samplesPerLength = 2.0f;
-            const float verticalOffset = 0.0f;
 
-            GameObject line = Instantiate(CellConnectionPrefab);
+			GameObject line = Instantiate(CellConnectionPrefab);
             LineRenderer lineRenderer = line.GetComponent<LineRenderer>();
 
             int samples = 2 + (int)(Vector3.Distance(cell.site, c.site) * samplesPerLength);
@@ -857,8 +911,8 @@ public class NavMesh_CellGenerator : MonoBehaviour
                 linePositions[i] = Vector3.Lerp(cell.site, c.site, (float)i / (samples - 1));
                 NavMeshHit hit;
                 NavMesh.SamplePosition(linePositions[i], out hit, 100, -1);
-                //float angle = nearestAngle - (Vector3.SignedAngle(Vector3.right, c.site - cell.site, Vector3.up) + 180);
-                linePositions[i] = hit.position + Vector3.up * verticalOffset * ((float)i / (samples - 1));
+				//float angle = nearestAngle - (Vector3.SignedAngle(Vector3.right, c.site - cell.site, Vector3.up) + 180);
+				linePositions[i] = hit.position + verticalOffsetFinal;
             }
             lineRenderer.SetPositions(linePositions);
 
@@ -895,9 +949,8 @@ public class NavMesh_CellGenerator : MonoBehaviour
 	// Use this for initialization
 	void Start()
     {
+		verticalOffsetFinal = Vector3.up * VerticalOffset;
 		CellList = new SortedCellList();
-
-
 		/// Cycling through all child objects, finding OffMeshLinks
 		/// Hope is to connect our Cells together via the OffMeshLinks
 		//foreach (Transform child in transform)
@@ -937,10 +990,13 @@ public class NavMesh_CellGenerator : MonoBehaviour
         {
             GetNeighbors(CellList.GetCell(i));
         }
-
+		CellList.RaiseCells(verticalOffsetFinal);
 		CellList.AssignIndices();
 		CellList.FindWallInfluence(GameObject.FindGameObjectsWithTag("Wall"));
 		InfluenceMapModeText.GetComponent<ModeUI>().ModeChange(Mode);
+
+		if (Mode == InfluenceMode.OpennessClosestWall)
+			CellList.ApplyWallInfluences();
 	}
 
     // Update is called once per frame
@@ -978,12 +1034,18 @@ public class NavMesh_CellGenerator : MonoBehaviour
 			CellList.ResetInfluences();
 			Mode = --Mode >= 0 ? Mode : InfluenceMode.NumValues - 1;
 			InfluenceMapModeText.GetComponent<ModeUI>().ModeChange(Mode);
+
+			if (Mode == InfluenceMode.OpennessClosestWall)
+				CellList.ApplyWallInfluences();
 		}
 		if (Input.GetKeyUp(KeyCode.RightBracket))
 		{
 			CellList.ResetInfluences();
 			Mode = ++Mode < InfluenceMode.NumValues ? Mode : 0;
 			InfluenceMapModeText.GetComponent<ModeUI>().ModeChange(Mode);
+
+			if (Mode == InfluenceMode.OpennessClosestWall)
+				CellList.ApplyWallInfluences();
 		}
 	}
 }
