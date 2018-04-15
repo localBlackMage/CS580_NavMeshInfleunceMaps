@@ -7,12 +7,13 @@ using UnityEngine.Rendering;
 
 public enum InfluenceMode
 {
-	Propagation = 0,
-	NormalizationPropagation,
-	Search,
-	VisibleToSpot,
-	Visibility,
-	OpennessClosestWall
+	Propagation = 0,			// Propagation as normal, click a cell to "drop" influence onto the map
+	NormalizedPropagation,		// Same as above but values are normalized with max influence values
+	FieldOfView,				// Allows the "player" to paint the cells via the line of sight box (Field of View)
+	VisibleToSpot,				// How many other cells can "see" this one
+	OpennessClosestWall,        // How close is this cell to a wall
+
+	NumValues
 }
 
 public class Pair<T1, T2>
@@ -27,553 +28,600 @@ public class Pair<T1, T2>
     public T2 second { get; set; }
 }
 
+/// <summary>
+/// Represents a single Voronoi region
+/// </summary>
+public class Cell
+{
+	public Vector3 site;            // The origin of this Voronoi region
+
+	public List<Pair<Cell, float>> adjacentCells; //A list of adjacent cells and the distances to them
+
+	float currentFadeTime;          // Current time from MaxFadeTimer to 0 used to interpolate influence color
+	float newInfluenceValue;        // Newly calculated influence value
+	float influenceValue;           // This Voronoi region's current influence (-1 to 1)
+	float wallInfluence;			// Stored influence value for closeness to a wall
+	GameObject dot;                 // Prefab PoissonDot object, should have a PoissonDot component attached
+	Renderer dotRenderer;           // Renderer component from the PoissonDot object spawned upon this cell's creation
+	NavMesh_CellGenerator parent;   // Parent object, passed to the instantiated Dot GameObject
+
+	/// <summary>
+	/// Given a t value, performs linear interpolation between the color white and the given color
+	/// </summary>
+	/// <param name="t">Value between 0 and 1</param>
+	/// <param name="otherColor">Color to interpolate with</param>
+	/// <returns></returns>
+	private Color LerpColor(float t, Color otherColor)
+	{
+		return (1.0f - t) * Color.white + t * otherColor;
+	}
+
+	/// <summary>
+	/// If this cell's influenceValue is greater than or equal to 0, calls LerpColor with the 
+	/// influenceValue and Red
+	/// Else, calls LerpColor with the absolute influenceValue and Blue
+	/// 
+	/// Either result in this cell's dotRenderer having it's material color changed to the result of 
+	/// LerpColor
+	/// </summary>
+	private void ColorDot()
+	{
+		if (influenceValue < 0.0f)
+			dotRenderer.material.SetColor("_Color", LerpColor(Math.Abs(influenceValue), Color.blue));
+		else
+			dotRenderer.material.SetColor("_Color", LerpColor(influenceValue, Color.red));
+	}
+
+	/// <summary>
+	/// For a given neighbor cell, calculates it's influence value using a decay formula and the 
+	/// NavMesh_CellGenerator's DecayFactor
+	/// </summary>
+	/// <param name="neighbor">Pair containing the neighbor Cell and the distance from that cell to this one</param>
+	/// <returns>The newly intrpolated influence value from the neighbor cell</returns>
+	private float GetInfluenceFromNeighbor(Pair<Cell, float> neighbor)
+	{
+		return neighbor.first.influenceValue * (float)(Math.Exp(-neighbor.second * parent.DecayFactor));
+	}
+
+	/// <summary>
+	/// Private method
+	/// Interpolates an influence value utilizing NavMesh_CellGenerator's GrowthValue and the given maxInfluence
+	/// </summary>
+	/// <param name="maxInfluence">Maximum influence from all neighboring cells</param>
+	/// <returns>The newly interpolated influence value for this cell</returns>
+	private float CalculateNewInfluence(float maxInfluence)
+	{
+		return (1.0f - parent.GrowthFactor) * influenceValue + parent.GrowthFactor * maxInfluence;
+	}
+
+	/// <summary>
+	/// Spawns a new Cell object
+	/// A new Dot will be instantiated at the given site with the given rotation
+	/// </summary>
+	/// <param name="_site">The world position of this cell</param>
+	/// <param name="_rotation">The rotation of this cell</param>
+	/// <param name="_dotPrefab">The Prefab Dot to be spawned</param>
+	/// <param name="_parent">NavMesh_CellGenerator object that this cell belongs to</param>
+	public Cell(Vector3 _site, Quaternion _rotation, GameObject _dotPrefab, NavMesh_CellGenerator _parent)
+	{
+		site = _site;
+		influenceValue = 0.0f;
+		currentFadeTime = 0.0f;
+
+		parent = _parent;
+
+		dot = UnityEngine.Object.Instantiate(_dotPrefab, site, _rotation);
+		dotRenderer = dot.GetComponent<Renderer>();
+		dotRenderer.material.SetColor("_Color", Color.white);
+
+		adjacentCells = new List<Pair<Cell, float>>();
+	}
+
+	/// <summary>
+	/// Given an index value, calls this cell's dot object's PoissonDot.SetParentAndIndex with 
+	/// this cell's parent and the given index
+	/// </summary>
+	/// <param name="index">An index into NavMesh_CellGenerator's cells list</param>
+	public void SetIndex(int index)
+	{
+		dot.GetComponent<PoissonDot>().SetParentAndIndex(parent, index);
+	}
+
+	/// <summary>
+	/// Sets this cell's influenceValue to the given value and calls ColorDot
+	/// </summary>
+	/// <param name="_influenceValue">This cell's new influenceValue</param>
+	public void SetInfluenceValue(float _influenceValue)
+	{
+		influenceValue = _influenceValue;
+		ColorDot();
+	}
+
+	/// <summary>
+	/// Resets currentFadeTime to MaxFadeTimer and sets influenceValue to the given value
+	/// </summary>
+	/// <param name="_influenceValue">This cell's new influenceValue</param>
+	public void SetInfluenceValueAndResetTimer(float _influenceValue)
+	{
+		influenceValue = _influenceValue;
+		currentFadeTime = influenceValue * parent.MaxFadeTimer;
+	}
+
+	/// <summary>
+	/// For all neighboring cells, if the cell's influenceValue is less than the new
+	/// influence value, that cell's SetInfluenceValueAndResetTimer method is called
+	/// </summary>
+	/// <param name="_influenceValue">influenceValue to pass to neighboring cells</param>
+	public void SetNeighborInfluenceValuesAndResetTimer(float _influenceValue)
+	{
+		foreach (Pair<Cell, float> neighbor in adjacentCells)
+		{
+			if (neighbor.first.influenceValue < _influenceValue)
+				neighbor.first.SetInfluenceValueAndResetTimer(_influenceValue);
+		}
+	}
+
+	/// <summary>
+	/// Sets this cell's influenceValue to this cell's newInfluenceValue and calls ColorDot
+	/// </summary>
+	public void ApplyNewInfluence()
+	{
+		influenceValue = newInfluenceValue;
+		ColorDot();
+	}
+
+	/// <summary>
+	/// Given the maximum negative and positive values of all cells, 
+	/// this method will divide this cell's newInfluenceValue by the 
+	/// respective maximum before calling ApplyNewInfluence
+	/// </summary>
+	/// <param name="maxNeg">Maximum negative value among all cells (value should be positive)</param>
+	/// <param name="maxPos">Maximum positive value among all cells</param>
+	public void NormalizeAndApplyNewInfluence(float maxNeg, float maxPos)
+	{
+		if (newInfluenceValue < 0.0f)
+			newInfluenceValue /= maxNeg;
+		else
+			newInfluenceValue /= maxPos;
+
+		ApplyNewInfluence();
+	}
+
+	/// <summary>
+	/// Used in propagation, uses a decay + growth formula to calculate this cell's newInfluenceValue
+	/// </summary>
+	public void CalculateCurrentInfluence()
+	{
+		float maxInfluence = 0.0f;
+		for (int i = 0; i < adjacentCells.Count; ++i)
+		{
+			float influence = GetInfluenceFromNeighbor(adjacentCells[i]);
+			maxInfluence = Math.Abs(maxInfluence) < Math.Abs(influence) ? influence : maxInfluence;
+		}
+
+		newInfluenceValue = CalculateNewInfluence(maxInfluence);
+	}
+
+	/// <summary>
+	/// Returns newInfluenceValue
+	/// </summary>
+	/// <returns>This cell's newInfluenceValue field, a float value from -1 to 1</returns>
+	public float GetNewInfluenceValue()
+	{
+		return newInfluenceValue;
+	}
+
+	/// <summary>
+	/// Decrements currentFadeTime and sets influenceValue to (currentFadeTime / MaxFadeTimer) before calling ColorDot
+	/// </summary>
+	/// <param name="deltaTime">Time since last call</param>
+	public void FadeInfluence(float deltaTime)
+	{
+		currentFadeTime -= deltaTime;
+		if (currentFadeTime < 0) currentFadeTime = 0.0f;
+		influenceValue = currentFadeTime / parent.MaxFadeTimer;
+		ColorDot();
+	}
+
+	/// <summary>
+	/// Sets this cell's wallInfluence to the given value
+	/// </summary>
+	/// <param name="_wallInfluence">This cell's new wallInfluence</param>
+	public void SetWallInfluence(float _wallInfluence)
+	{
+		wallInfluence = _wallInfluence;
+	}
+}
+
+/// <summary>
+/// A single triangle from the NavMesh
+/// </summary>
+public class Triangle
+{
+	public Vector3 v1, v2, v3;          // Vertices of this triangle
+	public Vector3 normal;              // Normal of the plane spanning this triangle
+	public GameObject l1, l2, l3;       // All Linerenderers associated with this triangle
+	public float area;                  // Area of this triangle -- used in PoissonDiscDistribution
+	public List<Cell> poissonCells;     // List of all Voronoi regions within this triangle
+	public GameObject dotPrefab;        // Prefab for the object used to display Voronoi site locations
+	public GameObject linePrefab;       // 
+	public float lineWidth;             //
+
+	/// <summary>
+	/// Spawn a Line prefab and orient it's box collider properly
+	/// </summary>
+	/// <param name="line">Reference to the current line GameObject to initialize</param>
+	/// <param name="start">Start point of the line</param>
+	/// <param name="end">End point of the line</param>
+	private void InitializeLine(ref GameObject line, Vector3 start, Vector3 end)
+	{
+		const float samplesPerLength = 2.0f;
+		const float verticalOffset = 0.1f;
+
+		line = UnityEngine.Object.Instantiate(linePrefab);
+		LineRenderer lineRenderer = line.GetComponent<LineRenderer>();
+
+		int samples = 2 + (int)(Vector3.Distance(start, end) * samplesPerLength);
+		lineRenderer.positionCount = samples;
+		Vector3[] linePositions = new Vector3[samples];
+		for (int i = 0; i < samples; ++i)
+		{
+			linePositions[i] = Vector3.Lerp(start, end, (float)i / (samples - 1));
+			NavMeshHit hit;
+			NavMesh.SamplePosition(linePositions[i], out hit, 100, -1);
+			linePositions[i] = hit.position + Vector3.up * verticalOffset;
+		}
+		lineRenderer.SetPositions(linePositions);
+
+		lineRenderer.enabled = true;
+		lineRenderer.widthMultiplier = lineWidth;
+
+		Transform colliderTransform = line.GetComponentInChildren<Transform>();
+
+		colliderTransform.localPosition = ((end - start) / 2.0f) + start;
+		colliderTransform.rotation = Quaternion.LookRotation(end - start, normal);
+
+		BoxCollider colliderBoxCollider = line.GetComponentInChildren<BoxCollider>();
+		colliderBoxCollider.size = new Vector3(0.025f, 0.025f, (end - start).magnitude);
+	}
+
+	public Triangle(Vector3 _v1, Vector3 _v2, Vector3 _v3, GameObject _dotPrefab, GameObject _linePrefab, float _lineWidth)
+	{
+		v1 = _v1;
+		v2 = _v2;
+		v3 = _v3;
+
+		dotPrefab = _dotPrefab;
+		linePrefab = _linePrefab;
+		lineWidth = _lineWidth;
+
+		InitializeLine(ref l1, v1, v2);
+		InitializeLine(ref l2, v2, v3);
+		InitializeLine(ref l3, v3, v1);
+
+		Vector3 a = v2 - v1;
+		Vector3 b = v3 - v1;
+		float aOnBProjectionLength = Vector3.Dot(a, b / b.magnitude);
+		Vector3 aOnBProjection = b.normalized * aOnBProjectionLength;
+		float height = (v2 - aOnBProjection).magnitude;
+		float baseWidth = b.magnitude;
+		area = (baseWidth * height) / 2.0f;
+
+		normal = Vector3.Cross(a, b);
+		normal.Normalize();
+	}
+
+	/// <summary>
+	/// Returns a point somewhere within this triangle
+	/// </summary>
+	/// <returns></returns>
+	public Vector3 RandomPoint()
+	{
+		float f1 = UnityEngine.Random.Range(0.0f, 1.0f);
+		float f2 = UnityEngine.Random.Range(0.0f, 1.0f - f1);
+		float f3 = 1.0f - f1 - f2;
+
+		return (v1 * f1) + (v2 * f2) + (v3 * f3);
+	}
+}
+
+/// <summary>
+/// A list of Cells, sorted on the X axis
+/// </summary>
+public class SortedCellList
+{
+	private List<Cell> cells = new List<Cell>();
+
+	public void AddCell(Cell cell)
+	{
+		if (cells.Count == 0)
+		{
+			cells.Add(cell);
+			return;
+		}
+
+
+		int i = cells.Count / 2;
+		int offset = Mathf.Max(i / 2, 1);
+
+		while (true)
+		{
+			if (i >= cells.Count)
+			{
+				i = cells.Count;
+				if (cells[i - 1].site.x <= cell.site.x)
+				{
+					break;
+				}
+				--i;
+			}
+			else if (i <= 0)
+			{
+				i = 0;
+				if (cells[0].site.x >= cell.site.x)
+				{
+					break;
+				}
+				++i;
+			}
+			else if (cells[i].site.x >= cell.site.x && cells[i - 1].site.x <= cell.site.x)
+			{
+				break;
+			}
+			if (cells[i - 1].site.x > cell.site.x)
+			{
+				i -= offset;
+				offset = Mathf.Max(offset / 2, 1);
+			}
+			else
+			{
+				i += offset;
+				offset = Mathf.Max(offset / 2, 1);
+			}
+		}
+		cells.Insert(i, cell);
+
+		//Debug info
+		for (int j = 0; j < cells.Count - 1; ++j)
+		{
+			if (cells[j].site.x > cells[j + 1].site.x)
+			{
+				Debug.Log("Not Sorted!!");
+			}
+		}
+		//Debug.Log(cells.Count);
+	}
+
+	/// <summary>
+	/// Finds the Cell with the X closest to value, without going below
+	/// </summary>
+	/// <param name="value"></param>
+	/// <returns>The index of the element</returns>
+	public int FindClosest(float value)
+	{
+		if (cells.Count == 0)
+		{
+			return 0;
+		}
+		int i = cells.Count / 2;
+		int offset = Mathf.Max(i / 2, 1);
+
+		while (true)
+		{
+			if (i >= cells.Count)
+			{
+				i = cells.Count;
+				if (cells[i - 1].site.x <= value)
+				{
+					break;
+				}
+				--i;
+			}
+			else if (i <= 0)
+			{
+				i = 0;
+				if (cells[0].site.x >= value)
+				{
+					break;
+				}
+				++i;
+			}
+			else if (cells[i].site.x >= value && cells[i - 1].site.x <= value)
+			{
+				break;
+			}
+			if (cells[i - 1].site.x >= value)
+			{
+				i -= offset;
+				offset = Mathf.Max(offset / 2, 1);
+			}
+			else
+			{
+				i += offset;
+				offset = Mathf.Max(offset / 2, 1);
+			}
+		}
+
+		return i;
+	}
+
+	public Pair<int, int> GetRange(Vector3 center, float distance)
+	{
+		int low = FindClosest(center.x - distance);
+		if (low != 0)
+		{
+			if (cells[low - 1].site.x >= center.x - distance)
+			{
+				Debug.Log("Error! Point should have been included in the lower bound!");
+				Debug.Log(cells.Count);
+				Debug.Log(cells[low - 1].site.x + " vs. " + (center.x - distance));
+			}
+		}
+		int high = FindClosest(center.x + distance);
+		if (high != 0)
+		{
+			if (cells[high - 1].site.x > center.x + distance)
+			{
+				//Debug.LogError("Error! Point should not have been included in the upper bound! (high too high)");
+				Debug.Log("Error! Point should not have been included in the upper bound! (high too high)");
+				Debug.Log(cells.Count);
+				Debug.Log(cells[high - 1].site.x + " vs. " + (center.x + distance));
+			}
+		}
+		if (high != cells.Count)
+		{
+			if (cells[high].site.x <= center.x + distance)
+			{
+				Debug.Log("Error! Point should not have been included in the upper bound! (high too low)");
+				Debug.Log(cells.Count);
+				Debug.Log(cells[high].site.x + " vs. " + (center.x + distance));
+			}
+		}
+
+		return new Pair<int, int>(FindClosest(center.x - distance), FindClosest(center.x + distance));
+	}
+
+	public Cell GetCell(int index)
+	{
+		return cells[index];
+	}
+
+	public int GetCount()
+	{
+		return cells.Count;
+	}
+
+	/// <summary>
+	/// For every cell contained within this list, calls cell.SetIndex(index) passing 
+	/// the cell's position within the List as the index
+	/// </summary>
+	public void AssignIndices()
+	{
+		for (int i = 0; i < cells.Count; ++i)
+		{
+			cells[i].SetIndex(i);
+		}
+	}
+
+	/// <summary>
+	/// For every cell contained within this list, calls cell.SetInfluenceValue with 0
+	/// </summary>
+	public void ResetInfluences()
+	{
+		foreach (Cell cell in cells)
+		{
+			cell.SetInfluenceValue(0.0f);
+		}
+	}
+
+	/// <summary>
+	/// Iterates through the cells and calls CalculateCurrentInfluence
+	/// Once all cells have finished calculating influence, 
+	/// it will iterate through the cells and call ApplyNewInfluence
+	/// </summary>
+	public void PropagateCells()
+	{
+		foreach (Cell cell in cells)
+		{
+			cell.CalculateCurrentInfluence();
+		}
+
+		foreach (Cell cell in cells)
+		{
+			cell.ApplyNewInfluence();
+		}
+	}
+
+	/// <summary>
+	/// Iterates through the cells and calls CalculateCurrentInfluence
+	/// Once all cells have finished calculating influence, 
+	/// it will iterate through the cells and call ApplyNewInfluence
+	/// Then, finds the maximum positve and negative values of all cells and normalizes their influence values
+	/// </summary>
+	public void NormalizePropogateCells()
+	{
+		float maxNeg = 0.0f;
+		float maxPos = 0.0f;
+
+		foreach (Cell cell in cells)
+		{
+			cell.CalculateCurrentInfluence();
+			float ival = cell.GetNewInfluenceValue();
+			if (ival < 0.0f)
+				maxNeg = ival < maxNeg ? ival : maxNeg;
+			else
+				maxPos = ival > maxPos ? ival : maxPos;
+		}
+		maxNeg *= -1.0f;
+		if (maxPos == 0.0f) maxPos = 1.0f;
+		if (maxNeg == 0.0f) maxNeg = 1.0f;
+
+
+		foreach (Cell cell in cells)
+		{
+			cell.NormalizeAndApplyNewInfluence(maxNeg, maxPos);
+		}
+	}
+
+	/// <summary>
+	/// Iterates through the cells and calls FadeInfluence
+	/// </summary>
+	/// <param name="deltaTime">Time since last call</param>
+	public void FadeInfluenceOnCells(float deltaTime)
+	{
+		foreach (Cell cell in cells)
+		{
+			cell.FadeInfluence(deltaTime);
+		}
+	}
+
+	/// <summary>
+	/// Given an array of wall GameObjects, iterates over all cells
+	/// and calculates their wallInfluence values
+	/// </summary>
+	/// <param name="walls">Array of GameObjects with the appropriate wall tag</param>
+	public void FindWallInfluence(GameObject[] walls)
+	{
+		foreach (Cell cell in cells)
+		{
+			int closestWallIndex = 0;
+			float closestWallDist = (cell.site - walls[0].transform.position).sqrMagnitude;
+			for(int i = 1; i<walls.Length; ++i)
+			{
+				float thisWallDist = (cell.site - walls[i].transform.position).sqrMagnitude;
+				if (thisWallDist < closestWallDist)
+				{
+					closestWallDist = thisWallDist;
+					closestWallIndex = i;
+				}
+			}
+
+			cell.SetWallInfluence(1.0f);
+		}
+	}
+}
+
 public class NavMesh_CellGenerator : MonoBehaviour
 {
-    public GameObject navMeshVertPrefab;                        // Prefab for the object used to display NavMesh vertices
-    public GameObject poissonDotPrefab;                         // Prefab for the object used to display Voronoi site locations
-    public GameObject linePrefab;                               // Prefab for the LineRenderer used to display lines and edges
-    public GameObject cellConnectionPrefab;                     // Prefab for the LineRenderer used to display edges between cells
-    public List<Triangle> navMeshTris = new List<Triangle>();   // All Triangles on the NavMesh in the scene
-    public float poissonTolerance = 0.5f;                       // What is the minimum distance apart each poisson point should be
-    public float lineWidth = 0.01f;                             // How wide to draw all the lines in the scene
-    public SortedCellList cells;                                // List of all existing cells within the scene -- will be used for the influence map calculations
-	public float stepTime = 0.1f;								// How long between propagation calculations
-	float currentTime = 0.0f;									// Timer for tracking propagation step time
+	public GameObject InfluenceMapModeText;
+	public GameObject NavMeshVertPrefab;                        // Prefab for the object used to display NavMesh vertices
+    public GameObject PoissonDotPrefab;                         // Prefab for the object used to display Voronoi site locations
+    public GameObject LinePrefab;                               // Prefab for the LineRenderer used to display lines and edges
+    public GameObject CellConnectionPrefab;                     // Prefab for the LineRenderer used to display edges between CellList
+    public List<Triangle> NavMeshTris = new List<Triangle>();   // All Triangles on the NavMesh in the scene
+    public float PoissonTolerance = 0.5f;                       // What is the minimum distance apart each poisson point should be
+    public float LineWidth = 0.01f;                             // How wide to draw all the lines in the scene
+    public SortedCellList CellList;                         // List of all existing CellList within the scene -- will be used for the influence map calculations
 	public InfluenceMode Mode = InfluenceMode.Propagation;		// Current mode for the influence map
 	public float DecayFactor = 0.2f;							// Decay factor for propagation formula
 	public float GrowthFactor = 0.3f;                           // Growth factor for propagation formula
 	public float MaxFadeTimer = 4.0f;							// How many seconds it'll take for a given cell to fade it's influence from 1 to 0, value cannot be 0
-	public bool ShouldRenderNeighborLines = false;				// Determines whether or not voronoi neighbor lines should be rendered
-
-    /// <summary>
-    /// Represents a single Voronoi region
-    /// </summary>
-    public class Cell
-    {
-        public Vector3 site;            // The origin of this Voronoi region
-
-        public List<Pair<Cell, float>> adjacentCells; //A list of adjacent cells and the distances to them
-
-		float currentFadeTime;			// Current time from MaxFadeTimer to 0 used to interpolate influence color
-		float newInfluenceValue;		// Newly calculated influence value
-        float influenceValue;			// This Voronoi region's current influence (-1 to 1)
-        GameObject dot;                 // Prefab PoissonDot object, should have a PoissonDot component attached
-        Renderer dotRenderer;           // Renderer component from the PoissonDot object spawned upon this cell's creation
-		NavMesh_CellGenerator parent;	// Parent object, passed to the instantiated Dot GameObject
-
-		/// <summary>
-		/// Given a t value, performs linear interpolation between the color white and the given color
-		/// </summary>
-		/// <param name="t">Value between 0 and 1</param>
-		/// <param name="otherColor">Color to interpolate with</param>
-		/// <returns></returns>
-		private Color LerpColor(float t, Color otherColor)
-		{
-			return (1.0f - t) * Color.white + t * otherColor;
-		}
-
-		/// <summary>
-		/// If this cell's influenceValue is greater than or equal to 0, calls LerpColor with the 
-		/// influenceValue and Red
-		/// Else, calls LerpColor with the absolute influenceValue and Blue
-		/// 
-		/// Either result in this cell's dotRenderer having it's material color changed to the result of 
-		/// LerpColor
-		/// </summary>
-        private void ColorDot()
-        {
-            if (influenceValue < 0.0f)
-				dotRenderer.material.SetColor("_Color", LerpColor(Math.Abs(influenceValue), Color.blue));
-			else
-				dotRenderer.material.SetColor("_Color", LerpColor(influenceValue, Color.red));
-        }
-
-		/// <summary>
-		/// For a given neighbor cell, calculates it's influence value using a decay formula and the 
-		/// NavMesh_CellGenerator's DecayFactor
-		/// </summary>
-		/// <param name="neighbor">Pair containing the neighbor Cell and the distance from that cell to this one</param>
-		/// <returns>The newly intrpolated influence value from the neighbor cell</returns>
-		private float GetInfluenceFromNeighbor(Pair<Cell, float> neighbor)
-		{
-			return neighbor.first.influenceValue * (float)(Math.Exp(-neighbor.second * parent.DecayFactor));
-		}
-
-		/// <summary>
-		/// Private method
-		/// Interpolates an influence value utilizing NavMesh_CellGenerator's GrowthValue and the given maxInfluence
-		/// </summary>
-		/// <param name="maxInfluence">Maximum influence from all neighboring cells</param>
-		/// <returns>The newly interpolated influence value for this cell</returns>
-		private float CalculateNewInfluence(float maxInfluence)
-		{
-			return (1.0f - parent.GrowthFactor) * influenceValue + parent.GrowthFactor * maxInfluence;
-		}
-
-		/// <summary>
-		/// Spawns a new Cell object
-		/// A new Dot will be instantiated at the given site with the given rotation
-		/// </summary>
-		/// <param name="_site">The world position of this cell</param>
-		/// <param name="_rotation">The rotation of this cell</param>
-		/// <param name="_dotPrefab">The Prefab Dot to be spawned</param>
-		/// <param name="_parent">NavMesh_CellGenerator object that this cell belongs to</param>
-		public Cell(Vector3 _site, Quaternion _rotation, GameObject _dotPrefab, NavMesh_CellGenerator _parent)
-        {
-            site = _site;
-            influenceValue = 0.0f;
-			currentFadeTime = 0.0f;
-
-			parent = _parent;
-
-			dot = Instantiate(_dotPrefab, site, _rotation);
-            dotRenderer = dot.GetComponent<Renderer>();
-            dotRenderer.material.SetColor("_Color", Color.white);
-
-            adjacentCells = new List<Pair<Cell, float>>();
-        }
-
-		/// <summary>
-		/// Given an index value, calls this cell's dot object's PoissonDot.SetParentAndIndex with 
-		/// this cell's parent and the given index
-		/// </summary>
-		/// <param name="index">An index into NavMesh_CellGenerator's cells list</param>
-		public void SetIndex(int index)
-		{
-			dot.GetComponent<PoissonDot>().SetParentAndIndex(parent, index);
-		}
-
-		/// <summary>
-		/// Sets this cell's influenceValue to the given value and calls ColorDot
-		/// </summary>
-		/// <param name="_influenceValue">This cell's new influenceValue</param>
-		public void SetInfluenceValue(float _influenceValue)
-		{
-			influenceValue = _influenceValue;
-			ColorDot();
-		}
-		
-		/// <summary>
-		/// Resets currentFadeTime to MaxFadeTimer and sets influenceValue to the given value
-		/// </summary>
-		/// <param name="_influenceValue">This cell's new influenceValue</param>
-		public void SetInfluenceValueAndResetTimer(float _influenceValue)
-		{
-			influenceValue = _influenceValue;
-			currentFadeTime = influenceValue * parent.MaxFadeTimer;
-		}
-
-		/// <summary>
-		/// For all neighboring cells, if the cell's influenceValue is less than the new
-		/// influence value, that cell's SetInfluenceValueAndResetTimer method is called
-		/// </summary>
-		/// <param name="_influenceValue">influenceValue to pass to neighboring cells</param>
-		public void SetNeighborInfluenceValuesAndResetTimer(float _influenceValue)
-		{
-			foreach (Pair<Cell, float> neighbor in adjacentCells)
-			{
-				if (neighbor.first.influenceValue < _influenceValue)
-					neighbor.first.SetInfluenceValueAndResetTimer(_influenceValue);
-			}
-		}
-
-		/// <summary>
-		/// Sets this cell's influenceValue to this cell's newInfluenceValue and calls ColorDot
-		/// </summary>
-		public void ApplyNewInfluence()
-		{
-			influenceValue = newInfluenceValue;
-			ColorDot();
-		}
-
-		/// <summary>
-		/// Given the maximum negative and positive values of all cells, 
-		/// this method will divide this cell's newInfluenceValue by the 
-		/// respective maximum before calling ApplyNewInfluence
-		/// </summary>
-		/// <param name="maxNeg">Maximum negative value among all cells (value should be positive)</param>
-		/// <param name="maxPos">Maximum positive value among all cells</param>
-		public void NormalizeAndApplyNewInfluence(float maxNeg, float maxPos)
-		{
-			if (newInfluenceValue < 0.0f)
-				newInfluenceValue /= maxNeg;
-			else
-				newInfluenceValue /= maxPos;
-
-			ApplyNewInfluence();
-		}
-
-		/// <summary>
-		/// Used in propagation, uses a decay + growth formula to calculate this cell's newInfluenceValue
-		/// </summary>
-		public void CalculateCurrentInfluence()
-		{
-			float maxInfluence = 0.0f;
-			for(int i = 0; i < adjacentCells.Count; ++i)
-			{
-				float influence = GetInfluenceFromNeighbor(adjacentCells[i]);
-				maxInfluence = Math.Abs(maxInfluence) < Math.Abs(influence) ? influence : maxInfluence;
-			}
-
-			newInfluenceValue = CalculateNewInfluence(maxInfluence);
-		}
-
-		/// <summary>
-		/// Returns newInfluenceValue
-		/// </summary>
-		/// <returns>This cell's newInfluenceValue field, a float value from -1 to 1</returns>
-		public float GetNewInfluenceValue()
-		{
-			return newInfluenceValue;
-		}
-
-		/// <summary>
-		/// Decrements currentFadeTime and sets influenceValue to (currentFadeTime / MaxFadeTimer) before calling ColorDot
-		/// </summary>
-		/// <param name="deltaTime">Time since last call</param>
-		public void FadeInfluence(float deltaTime) {
-			currentFadeTime -= deltaTime;
-			if (currentFadeTime < 0) currentFadeTime = 0.0f;
-			influenceValue = currentFadeTime / parent.MaxFadeTimer;
-			ColorDot();
-		}
-	}
-
-    /// <summary>
-    /// A single triangle from the NavMesh
-    /// </summary>
-    public class Triangle
-    {
-        public Vector3 v1, v2, v3;          // Vertices of this triangle
-        public Vector3 normal;              // Normal of the plane spanning this triangle
-        public GameObject l1, l2, l3;       // All Linerenderers associated with this triangle
-        public float area;                  // Area of this triangle -- used in PoissonDiscDistribution
-        public List<Cell> poissonCells;     // List of all Voronoi regions within this triangle
-        public GameObject dotPrefab;        // Prefab for the object used to display Voronoi site locations
-        public GameObject linePrefab;       // 
-        public float lineWidth;             //
-
-        /// <summary>
-        /// Spawn a Line prefab and orient it's box collider properly
-        /// </summary>
-        /// <param name="line">Reference to the current line GameObject to initialize</param>
-        /// <param name="start">Start point of the line</param>
-        /// <param name="end">End point of the line</param>
-        private void InitializeLine(ref GameObject line, Vector3 start, Vector3 end)
-        {
-            const float samplesPerLength = 2.0f;
-            const float verticalOffset = 0.1f;
-
-            line = Instantiate(linePrefab);
-            LineRenderer lineRenderer = line.GetComponent<LineRenderer>();
-
-            int samples = 2 + (int)(Vector3.Distance(start, end) * samplesPerLength);
-            lineRenderer.positionCount = samples;
-            Vector3[] linePositions = new Vector3[samples];
-            for (int i = 0; i < samples; ++i)
-            {
-                linePositions[i] = Vector3.Lerp(start, end, (float)i / (samples - 1));
-                NavMeshHit hit;
-                NavMesh.SamplePosition(linePositions[i], out hit, 100, -1);
-                linePositions[i] = hit.position + Vector3.up * verticalOffset;
-            }
-            lineRenderer.SetPositions(linePositions);
-
-            lineRenderer.enabled = true;
-            lineRenderer.widthMultiplier = lineWidth;
-
-            Transform colliderTransform = line.GetComponentInChildren<Transform>();
-
-            colliderTransform.localPosition = ((end - start) / 2.0f) + start;
-            colliderTransform.rotation = Quaternion.LookRotation(end - start, normal);
-
-            BoxCollider colliderBoxCollider = line.GetComponentInChildren<BoxCollider>();
-            colliderBoxCollider.size = new Vector3(0.025f, 0.025f, (end - start).magnitude);
-        }
-
-        public Triangle(Vector3 _v1, Vector3 _v2, Vector3 _v3, GameObject _dotPrefab, GameObject _linePrefab, float _lineWidth)
-        {
-            v1 = _v1;
-            v2 = _v2;
-            v3 = _v3;
-
-            dotPrefab = _dotPrefab;
-            linePrefab = _linePrefab;
-            lineWidth = _lineWidth;
-
-            InitializeLine(ref l1, v1, v2);
-            InitializeLine(ref l2, v2, v3);
-            InitializeLine(ref l3, v3, v1);
-
-            Vector3 a = v2 - v1;
-            Vector3 b = v3 - v1;
-            float aOnBProjectionLength = Vector3.Dot(a, b / b.magnitude);
-            Vector3 aOnBProjection = b.normalized * aOnBProjectionLength;
-            float height = (v2 - aOnBProjection).magnitude;
-            float baseWidth = b.magnitude;
-            area = (baseWidth * height) / 2.0f;
-
-            normal = Vector3.Cross(a, b);
-            normal.Normalize();
-        }
-
-        /// <summary>
-        /// Returns a point somewhere within this triangle
-        /// </summary>
-        /// <returns></returns>
-        public Vector3 RandomPoint()
-        {
-            float f1 = UnityEngine.Random.Range(0.0f, 1.0f);
-            float f2 = UnityEngine.Random.Range(0.0f, 1.0f - f1);
-            float f3 = 1.0f - f1 - f2;
-
-            return (v1 * f1) + (v2 * f2) + (v3 * f3);
-        }
-    }
-
-    /// <summary>
-    /// A list of Cells, sorted on the X axis
-    /// </summary>
-    public class SortedCellList
-    {
-        private List<Cell> cells = new List<Cell>();
-
-        public void AddCell(Cell cell)
-        {
-            if (cells.Count == 0)
-            {
-                cells.Add(cell);
-                return;
-            }
-
-
-            int i = cells.Count / 2;
-            int offset = Mathf.Max(i / 2, 1);
-
-            while (true)
-            {
-                if (i >= cells.Count)
-                {
-                    i = cells.Count;
-                    if (cells[i - 1].site.x <= cell.site.x)
-                    {
-                        break;
-                    }
-                    --i;
-                }
-                else if (i <= 0)
-                {
-                    i = 0;
-                    if (cells[0].site.x >= cell.site.x)
-                    {
-                        break;
-                    }
-                    ++i;
-                }
-                else if (cells[i].site.x >= cell.site.x && cells[i - 1].site.x <= cell.site.x)
-                {
-                    break;
-                }
-                if (cells[i - 1].site.x > cell.site.x)
-                {
-                    i -= offset;
-                    offset = Mathf.Max(offset / 2, 1);
-                }
-                else
-                {
-                    i += offset;
-                    offset = Mathf.Max(offset / 2, 1);
-                }
-            }
-            cells.Insert(i, cell);
-
-            //Debug info
-            for (int j = 0; j < cells.Count - 1; ++j)
-            {
-                if (cells[j].site.x > cells[j + 1].site.x)
-                {
-                    Debug.Log("Not Sorted!!");
-                }
-            }
-            //Debug.Log(cells.Count);
-        }
-
-        /// <summary>
-        /// Finds the Cell with the X closest to value, without going below
-        /// </summary>
-        /// <param name="value"></param>
-        /// <returns>The index of the element</returns>
-        public int FindClosest(float value)
-        {
-            if (cells.Count == 0)
-            {
-                return 0;
-            }
-            int i = cells.Count / 2;
-            int offset = Mathf.Max(i / 2, 1);
-
-            while (true)
-            {
-                if (i >= cells.Count)
-                {
-                    i = cells.Count;
-                    if (cells[i - 1].site.x <= value)
-                    {
-                        break;
-                    }
-                    --i;
-                }
-                else if (i <= 0)
-                {
-                    i = 0;
-                    if (cells[0].site.x >= value)
-                    {
-                        break;
-                    }
-                    ++i;
-                }
-                else if (cells[i].site.x >= value && cells[i - 1].site.x <= value)
-                {
-                    break;
-                }
-                if (cells[i - 1].site.x >= value)
-                {
-                    i -= offset;
-                    offset = Mathf.Max(offset / 2, 1);
-                }
-                else
-                {
-                    i += offset;
-                    offset = Mathf.Max(offset / 2, 1);
-                }
-            }
-
-            return i;
-        }
-
-        public Pair<int, int> GetRange(Vector3 center, float distance)
-        {
-            int low = FindClosest(center.x - distance);
-            if (low != 0)
-            {
-                if (cells[low - 1].site.x >= center.x - distance)
-                {
-                    Debug.Log("Error! Point should have been included in the lower bound!");
-                    Debug.Log(cells.Count);
-                    Debug.Log(cells[low - 1].site.x + " vs. " + (center.x - distance));
-                }
-            }
-            int high = FindClosest(center.x + distance);
-            if (high != 0)
-            {
-                if (cells[high - 1].site.x > center.x + distance)
-                {
-                    //Debug.LogError("Error! Point should not have been included in the upper bound! (high too high)");
-                    Debug.Log("Error! Point should not have been included in the upper bound! (high too high)");
-                    Debug.Log(cells.Count);
-                    Debug.Log(cells[high - 1].site.x + " vs. " + (center.x + distance));
-                }
-            }
-            if (high != cells.Count)
-            {
-                if (cells[high].site.x <= center.x + distance)
-                {
-                    Debug.Log("Error! Point should not have been included in the upper bound! (high too low)");
-                    Debug.Log(cells.Count);
-                    Debug.Log(cells[high].site.x + " vs. " + (center.x + distance));
-                }
-            }
-
-            return new Pair<int, int>(FindClosest(center.x - distance), FindClosest(center.x + distance));
-        }
-
-        public Cell GetCell(int index)
-        {
-            return cells[index];
-        }
-
-        public int GetCount()
-        {
-            return cells.Count;
-        }
-
-		/// <summary>
-		/// For every cell contained within this list, calls cell.SetIndex(index) passing 
-		/// the cell's position within the List as the index
-		/// </summary>
-		public void AssignIndices()
-		{
-			for (int i = 0; i < cells.Count; ++i)
-			{
-				cells[i].SetIndex(i);
-			}
-		}
-
-		/// <summary>
-		/// Iterates through the cells and calls CalculateCurrentInfluence
-		/// Once all cells have finished calculating influence, 
-		/// it will iterate through the cells and call ApplyNewInfluence
-		/// </summary>
-		public void PropagateCells()
-		{
-			foreach(Cell cell in cells)
-			{
-				cell.CalculateCurrentInfluence();
-			}
-
-			foreach (Cell cell in cells)
-			{
-				cell.ApplyNewInfluence();
-			}
-		}
-
-		/// <summary>
-		/// Iterates through the cells and calls CalculateCurrentInfluence
-		/// Once all cells have finished calculating influence, 
-		/// it will iterate through the cells and call ApplyNewInfluence
-		/// Then, finds the maximum positve and negative values of all cells and normalizes their influence values
-		/// </summary>
-		public void NormalizePropogateCells()
-		{
-			float maxNeg = 0.0f;
-			float maxPos = 0.0f;
-
-			foreach (Cell cell in cells)
-			{
-				cell.CalculateCurrentInfluence();
-				float ival = cell.GetNewInfluenceValue();
-				if (ival < 0.0f)
-					maxNeg = ival < maxNeg ? ival : maxNeg;
-				else
-					maxPos = ival > maxPos ? ival : maxPos;
-			}
-			maxNeg *= -1.0f;
-			if (maxPos == 0.0f) maxPos = 1.0f;
-			if (maxNeg == 0.0f) maxNeg = 1.0f;
-
-
-			foreach (Cell cell in cells)
-			{
-				cell.NormalizeAndApplyNewInfluence(maxNeg, maxPos);
-			}
-		}
-
-		/// <summary>
-		/// Iterates through the cells and calls FadeInfluence
-		/// </summary>
-		/// <param name="deltaTime">Time since last call</param>
-		public void FadeInfluenceOnCells(float deltaTime)
-		{
-			foreach (Cell cell in cells)
-			{
-				cell.FadeInfluence(deltaTime);
-			}
-		}
-	}
-
+	public bool ShouldRenderNeighborLines = false;              // Determines whether or not voronoi neighbor lines should be rendered
+	public float StepTime = 0.1f;                               // How long between propagation calculations
+	float CurrentTime = 0.0f;                                   // Timer for tracking propagation step time
 
 	/// <summary>
-	/// Given a Triangle and a tolerance, the triangle's cells member will be 
+	/// Given a Triangle and a tolerance, the triangle's CellList member will be 
 	/// populated with Cells that represent Voronoi regions
 	/// </summary>
 	/// <param name="triangle">Triangle to generate Poisson points within</param>
@@ -594,8 +642,8 @@ public class NavMesh_CellGenerator : MonoBehaviour
             points[points.Count - 1] = hit.position;
 
             //Here for stress testing
-            //cells.AddCell(new Cell(points[points.Count - 1], transform.rotation, poissonDotPrefab, linePrefab));
-            //cells.GetRange(points[points.Count - 1], poissonTolerance * 2);
+            //CellList.AddCell(new Cell(points[points.Count - 1], transform.rotation, PoissonDotPrefab, LinePrefab));
+            //CellList.GetRange(points[points.Count - 1], PoissonTolerance * 2);
         }
 
         // Test each point against the selected final points
@@ -604,10 +652,10 @@ public class NavMesh_CellGenerator : MonoBehaviour
         foreach (Vector3 point in points)
         {
             bool tooClose = false;
-            Pair<int, int> bounds = cells.GetRange(point, poissonTolerance * 2);
+            Pair<int, int> bounds = CellList.GetRange(point, PoissonTolerance * 2);
             for (int i = bounds.first; i < bounds.second; ++i)
             {
-                if (Vector3.Distance(point, cells.GetCell(i).site) < tolerance)
+                if (Vector3.Distance(point, CellList.GetCell(i).site) < tolerance)
                 {
                     tooClose = true;
                     break;
@@ -616,7 +664,7 @@ public class NavMesh_CellGenerator : MonoBehaviour
 
             if (!tooClose)
             {
-                cells.AddCell(new Cell(point, transform.rotation, poissonDotPrefab, this));
+                CellList.AddCell(new Cell(point, transform.rotation, PoissonDotPrefab, this));
                 pointsFinal.Add(point);
             }
         }
@@ -664,7 +712,7 @@ public class NavMesh_CellGenerator : MonoBehaviour
 
     void GetNeighbors(Cell cell)
     {
-        Pair<int, int> bounds = cells.GetRange(cell.site, poissonTolerance * 10);
+        Pair<int, int> bounds = CellList.GetRange(cell.site, PoissonTolerance * 10);
 
         if (bounds.first == bounds.second)
         {
@@ -678,21 +726,21 @@ public class NavMesh_CellGenerator : MonoBehaviour
         List<Cell> allCells = new List<Cell>(bounds.second - bounds.first);
         for (int i = bounds.first; i < bounds.second; ++i)
         {
-            float dist = Vector3.Distance(cell.site, cells.GetCell(i).site);
-            if (dist < poissonTolerance || Mathf.Abs(cell.site.y - cells.GetCell(i).site.y) > poissonTolerance)
+            float dist = Vector3.Distance(cell.site, CellList.GetCell(i).site);
+            if (dist < PoissonTolerance || Mathf.Abs(cell.site.y - CellList.GetCell(i).site.y) > PoissonTolerance)
             {
                 continue;
             }
-            if (dist < poissonTolerance * 3)
+            if (dist < PoissonTolerance * 3)
             {
-                possibleCells.Add(cells.GetCell(i));
+                possibleCells.Add(CellList.GetCell(i));
                 if (dist < nearestDist)
                 {
                     nearest = possibleCells.Count - 1;
                     nearestDist = dist;
                 }
             }
-            allCells.Add(cells.GetCell(i));
+            allCells.Add(CellList.GetCell(i));
         }
 
         if (possibleCells.Count == 0)
@@ -702,7 +750,7 @@ public class NavMesh_CellGenerator : MonoBehaviour
         }
 
         //Debug line to the nearest cell
-        //GameObject l = Instantiate(linePrefab);
+        //GameObject l = Instantiate(LinePrefab);
         //LineRenderer lr = l.GetComponent<LineRenderer>();
         //
         //int ss = 2 + (int)(Vector3.Distance(cell.site, possibleCells[nearest].site) * 3);
@@ -718,8 +766,8 @@ public class NavMesh_CellGenerator : MonoBehaviour
         //lr.SetPositions(lps);
         //
         //lr.enabled = true;
-        //lr.widthMultiplier = lineWidth;
-        //lr.endWidth = lineWidth / 2;
+        //lr.widthMultiplier = LineWidth;
+        //lr.endWidth = LineWidth / 2;
 
         float nearestAngle = Vector3.SignedAngle(Vector3.right, possibleCells[nearest].site - cell.site, Vector3.up) + 180;
 
@@ -798,7 +846,7 @@ public class NavMesh_CellGenerator : MonoBehaviour
             const float samplesPerLength = 2.0f;
             const float verticalOffset = 0.0f;
 
-            GameObject line = Instantiate(cellConnectionPrefab);
+            GameObject line = Instantiate(CellConnectionPrefab);
             LineRenderer lineRenderer = line.GetComponent<LineRenderer>();
 
             int samples = 2 + (int)(Vector3.Distance(cell.site, c.site) * samplesPerLength);
@@ -815,39 +863,39 @@ public class NavMesh_CellGenerator : MonoBehaviour
             lineRenderer.SetPositions(linePositions);
 
             lineRenderer.enabled = ShouldRenderNeighborLines;
-            lineRenderer.widthMultiplier = lineWidth;
-            lineRenderer.endWidth = lineWidth / 4;
+            lineRenderer.widthMultiplier = LineWidth;
+            lineRenderer.endWidth = LineWidth / 4;
             cell.adjacentCells.Add(new Pair<Cell, float>(c, Vector3.Distance(c.site, cell.site))); //Add
         }
     }
 
 	/// <summary>
-	/// Given an index into cells, sets that Cell's influence value
+	/// Given an index into CellList, sets that Cell's influence value
 	/// </summary>
-	/// <param name="index">Index into cells List</param>
+	/// <param name="index">Index into CellList List</param>
 	/// <param name="influence">Influence value to set this cell to</param>
 	public void PropagationFromCell(int index, float influence)
 	{
-		cells.GetCell(index).SetInfluenceValue(influence);
+		CellList.GetCell(index).SetInfluenceValue(influence);
 	}
 
 	/// <summary>
-	/// Given an index into cells, sets the Cell's influence value to maximum
+	/// Given an index into CellList, sets the Cell's influence value to maximum
 	/// </summary>
-	/// <param name="index">Index into cells List</param>
+	/// <param name="index">Index into CellList List</param>
 	public void InFieldOfView(int index)
 	{
-		if (Mode == InfluenceMode.Visibility)
+		if (Mode == InfluenceMode.FieldOfView)
 		{
-			cells.GetCell(index).SetInfluenceValueAndResetTimer(1.0f);
-			cells.GetCell(index).SetNeighborInfluenceValuesAndResetTimer(0.5f);
+			CellList.GetCell(index).SetInfluenceValueAndResetTimer(1.0f);
+			CellList.GetCell(index).SetNeighborInfluenceValuesAndResetTimer(0.5f);
 		}
 	}
 
 	// Use this for initialization
 	void Start()
     {
-        cells = new SortedCellList();
+		CellList = new SortedCellList();
 
 
 		/// Cycling through all child objects, finding OffMeshLinks
@@ -868,7 +916,7 @@ public class NavMesh_CellGenerator : MonoBehaviour
         // Spawn vertex prefabs at the vertices of the NavMesh
         foreach (Vector3 vert in tris.vertices)
         {
-            Instantiate(navMeshVertPrefab, vert, transform.rotation);
+            Instantiate(NavMeshVertPrefab, vert, transform.rotation);
         }
 
         // Using the indicies of the NavMesh, create Triangles and call PoissonDiscDistribution with it to create
@@ -879,52 +927,63 @@ public class NavMesh_CellGenerator : MonoBehaviour
                 tris.vertices[tris.indices[index + 0]],
                 tris.vertices[tris.indices[index + 1]],
                 tris.vertices[tris.indices[index + 2]],
-                poissonDotPrefab, linePrefab, lineWidth
+                PoissonDotPrefab, LinePrefab, LineWidth
             );
-            navMeshTris.Add(tri);
-            PoissonDiscDistribution(tri, poissonTolerance);
+            NavMeshTris.Add(tri);
+            PoissonDiscDistribution(tri, PoissonTolerance);
         }
 
-        for (int i = 0; i < cells.GetCount(); ++i)
+        for (int i = 0; i < CellList.GetCount(); ++i)
         {
-            GetNeighbors(cells.GetCell(i));
+            GetNeighbors(CellList.GetCell(i));
         }
 
-		cells.AssignIndices();
-
-		if (Mode == InfluenceMode.OpennessClosestWall)
-		{
-
-		}
-    }
+		CellList.AssignIndices();
+		CellList.FindWallInfluence(GameObject.FindGameObjectsWithTag("Wall"));
+		InfluenceMapModeText.GetComponent<ModeUI>().ModeChange(Mode);
+	}
 
     // Update is called once per frame
     void Update()
     {
-		currentTime += Time.deltaTime;
-		if (currentTime >= stepTime)
+		CurrentTime += Time.deltaTime;
+		if (CurrentTime >= StepTime)
 		{
 			switch (Mode)
 			{
 				case InfluenceMode.Propagation:
 				{
-					cells.PropagateCells();
+					CellList.PropagateCells();
 					break;
 				}
-				case InfluenceMode.NormalizationPropagation:
+				case InfluenceMode.NormalizedPropagation:
 				{
-					cells.PropagateCells();
-					cells.NormalizePropogateCells();
+					CellList.PropagateCells();
+					CellList.NormalizePropogateCells();
 					break;
 				}
-				case InfluenceMode.Visibility:
+				case InfluenceMode.FieldOfView:
 				{
-					cells.FadeInfluenceOnCells(stepTime);
+					CellList.FadeInfluenceOnCells(StepTime);
 					break;
 				}
 			}
 
-			currentTime = 0.0f;
+			CurrentTime = 0.0f;
+		}
+
+
+		if (Input.GetKeyUp(KeyCode.LeftBracket))
+		{
+			CellList.ResetInfluences();
+			Mode = --Mode >= 0 ? Mode : InfluenceMode.NumValues - 1;
+			InfluenceMapModeText.GetComponent<ModeUI>().ModeChange(Mode);
+		}
+		if (Input.GetKeyUp(KeyCode.RightBracket))
+		{
+			CellList.ResetInfluences();
+			Mode = ++Mode < InfluenceMode.NumValues ? Mode : 0;
+			InfluenceMapModeText.GetComponent<ModeUI>().ModeChange(Mode);
 		}
 	}
 }

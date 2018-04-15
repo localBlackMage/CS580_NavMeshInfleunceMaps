@@ -3,6 +3,7 @@ using System.Collections;
 
 public class NavCam : MonoBehaviour
 {
+	public GameObject ControlModeText;
 	public float cameraSensitivity = 90;
 	public float climbSpeed = 4;
 	public float normalMoveSpeed = 10;
@@ -16,6 +17,7 @@ public class NavCam : MonoBehaviour
 	void Start()
 	{
 		Cursor.lockState = CursorLockMode.Locked;
+		ControlModeText.GetComponent<ControllingUI>().ControlChange(ControlMode.Camera);
 	}
 
 	// Update is called once per frame
@@ -24,6 +26,8 @@ public class NavCam : MonoBehaviour
 		if (Input.GetKeyDown(KeyCode.Tab))
 		{
 			locked = !locked;
+			if (!locked)
+				ControlModeText.GetComponent<ControllingUI>().ControlChange(ControlMode.Camera);
 		}
 
 		if (!locked)
