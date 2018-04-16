@@ -37,10 +37,12 @@ public class Cell
 
 	public List<Pair<Cell, float>> adjacentCells; //A list of adjacent cells and the distances to them
 
+	int index;                      // Index into NavMesh_CellGenerator.CellList where this cell is
 	float currentFadeTime;          // Current time from MaxFadeTimer to 0 used to interpolate influence color
 	float newInfluenceValue;        // Newly calculated influence value
 	float influenceValue;           // This Voronoi region's current influence (-1 to 1)
-	float wallInfluence;			// Stored influence value for closeness to a wall
+	float wallInfluence;            // Stored influence value for closeness to a wall
+	float visibilityInfluence;      // Stored influence value for visibility by other cells
 	GameObject dot;                 // PoissonDot object, should have a PoissonDot component attached
 	Renderer dotRenderer;           // Renderer component from the PoissonDot object spawned upon this cell's creation
 	NavMesh_CellGenerator parent;   // Parent object, passed to the instantiated Dot GameObject
@@ -105,8 +107,7 @@ public class Cell
 	public Cell(Vector3 _site, Quaternion _rotation, GameObject _dotPrefab, NavMesh_CellGenerator _parent)
 	{
 		site = _site;
-		influenceValue = 0.0f;
-		currentFadeTime = 0.0f;
+		influenceValue = newInfluenceValue = wallInfluence = visibilityInfluence = currentFadeTime = 0.0f;
 
 		parent = _parent;
 
@@ -122,9 +123,15 @@ public class Cell
 	/// this cell's parent and the given index
 	/// </summary>
 	/// <param name="index">An index into NavMesh_CellGenerator's cells list</param>
-	public void SetIndex(int index)
+	public void SetIndex(int _index)
 	{
-		dot.GetComponent<PoissonDot>().SetParentAndIndex(parent, index);
+		index = _index;
+		dot.GetComponent<PoissonDot>().SetParentAndIndex(parent, _index);
+	}
+
+	public int GetIndex()
+	{
+		return index;
 	}
 
 	public void MoveSiteVertically(Vector3 verticalOffset)
@@ -247,6 +254,24 @@ public class Cell
 		ColorDot();
 	}
 
+	/// <summary>
+	/// 
+	/// </summary>
+	/// <param name="_visibilityInfluence"></param>
+	public void SetVisibilityInfluenceValue(float _visibilityInfluence)
+	{
+		visibilityInfluence = _visibilityInfluence;
+	}
+
+	/// <summary>
+	/// 
+	/// </summary>
+	public void ApplyVisibilityInfluence()
+	{
+		influenceValue = visibilityInfluence;
+		ColorDot();
+	}
+
 	public Transform GetTransform()
 	{
 		return dot.transform;
@@ -296,14 +321,6 @@ public class Triangle
 
 		lineRenderer.enabled = true;
 		lineRenderer.widthMultiplier = lineWidth;
-
-		Transform colliderTransform = line.GetComponentInChildren<Transform>();
-
-		colliderTransform.localPosition = ((end - start) / 2.0f) + start;
-		colliderTransform.rotation = Quaternion.LookRotation(end - start, normal);
-
-		BoxCollider colliderBoxCollider = line.GetComponentInChildren<BoxCollider>();
-		colliderBoxCollider.size = new Vector3(0.025f, 0.025f, (end - start).magnitude);
 	}
 
 	public Triangle(Vector3 _v1, Vector3 _v2, Vector3 _v3, GameObject _dotPrefab, GameObject _linePrefab, float _lineWidth)
@@ -343,6 +360,57 @@ public class Triangle
 		float f3 = 1.0f - f1 - f2;
 
 		return (v1 * f1) + (v2 * f2) + (v3 * f3);
+	}
+
+	public Vector3 GetVertices(int vert)
+	{
+		switch (vert)
+		{
+			case 0:
+				return v1;
+			case 1:
+				return v2;
+			case 2:
+				return v3;
+			default:
+				return v1;
+		}
+	}
+
+	/// <summary>
+	/// Attempts a ray cast from the given position to each vertex of
+	/// this triangle and returns true if any of the ray casts hit nothing
+	/// </summary>
+	/// <param name="pos">Cell cite</param>
+	/// <returns>True - at least one vertex of this triangle can be seen from the given position</returns>
+	public bool CanSeeTriangle(Vector3 pos, int layerToCastOn)
+	{
+		RaycastHit hit;
+
+		Vector3 dir = v1 - pos;
+		Ray ray = new Ray(pos, dir);
+		Physics.Raycast(ray, out hit, dir.magnitude, layerToCastOn);
+		if (!hit.collider)
+			return true;
+
+		dir = v2 - pos;
+		ray = new Ray(pos, dir);
+		Physics.Raycast(ray, out hit, dir.magnitude, layerToCastOn);
+		if (!hit.collider)
+			return true;
+
+		dir = v3 - pos;
+		ray = new Ray(pos, dir);
+		Physics.Raycast(ray, out hit, dir.magnitude, layerToCastOn);
+		if (!hit.collider)
+			return true;
+
+		return false;
+	}
+
+	public List<Cell> GetCells()
+	{
+		return poissonCells;
 	}
 }
 
@@ -610,6 +678,10 @@ public class SortedCellList
 	/// <param name="walls">Array of GameObjects with the appropriate wall tag</param>
 	public void FindWallInfluence(GameObject[] walls)
 	{
+		int layerToCastOn = LayerMask.GetMask("Wall");
+		RaycastHit hit;
+		Vector3 dir;
+		Ray ray;
 		foreach (Cell cell in cells)
 		{
 			int closestWallIndex = 0;
@@ -624,11 +696,28 @@ public class SortedCellList
 					closestWallIndex = i;
 				}
 			}
-			closestWallDist = (float)Math.Sqrt((double)closestWallDist);
-			float iVal = 1.0f / (closestWallDist * closestWallDist);
-			Mathf.Clamp(iVal, 0.0f, 1.0f);
-			Debug.Log("Closest Dist: " + closestWallDist + " :: iVal: " + iVal);
-			cell.SetWallInfluence(1.0f);
+
+			dir = walls[closestWallIndex].transform.position - cell.GetTransform().position;
+			ray = new Ray(cell.GetTransform().position, dir);
+			Physics.Raycast(ray, out hit, dir.magnitude, layerToCastOn);
+			if (hit.collider)
+			{
+				ray = new Ray(cell.GetTransform().position, -hit.normal);
+				Physics.Raycast(ray, out hit, dir.magnitude, layerToCastOn);
+				if (hit.collider)
+				{
+					closestWallDist = Vector3.Distance(cell.GetTransform().position, hit.point);
+					float iVal = 1.0f / (closestWallDist * closestWallDist);
+					Mathf.Clamp(iVal, 0.0f, 1.0f);
+					cell.SetWallInfluence(iVal);
+				}
+				else
+					cell.SetWallInfluence(0.0f);
+			}
+			else
+			{
+				cell.SetWallInfluence(0.0f);
+			}
 		}
 	}
 
@@ -646,23 +735,47 @@ public class SortedCellList
 	/// <summary>
 	/// 
 	/// </summary>
-	public void FindVisibilityInfluence()
+	public void ApplyVisibilityInfluences()
 	{
-		int layerToCastOn = LayerMask.GetMask("BlockLoS");
-		for (int i = 0; i < cells.Count; ++i)
+		foreach (Cell cell in cells)
 		{
-			for (int j = 0; j < cells.Count; ++j)
-			{
-				if (i == j) continue;
-				Vector3 dir = cells[j].GetTransform().position - cells[i].GetTransform().position;
-				Ray ray = new Ray(cells[i].GetTransform().position, dir.normalized);
-				RaycastHit hit;
-				Physics.Raycast(ray, out hit, dir.magnitude, layerToCastOn);
-				if (hit.collider)
-				{
+			cell.ApplyVisibilityInfluence();
+		}
+	}
 
+
+	public void FindVisibilityInfluence(List<Triangle> tris)
+	{
+		int layerToCastOn = LayerMask.GetMask("BlockVisibility");
+		Vector3 verticalOffsetAmount = Vector3.up * 0.5f;
+		RaycastHit hit;
+		Vector3 dir;
+		Ray ray;
+		
+		foreach (Cell currentCell in cells)
+		{
+			Vector3 currCellPos = currentCell.GetTransform().position + verticalOffsetAmount;
+			float numSeen = 0.0f;
+
+			foreach(Triangle tri in tris)
+			{
+				if (tri.CanSeeTriangle(currCellPos, layerToCastOn))
+				{
+					List<Cell> triCells = tri.GetCells();
+					foreach (Cell cell in triCells)
+					{
+						if (cell.GetIndex() == currentCell.GetIndex()) continue;
+						dir = cell.GetTransform().position - currCellPos;
+						ray = new Ray(currCellPos, dir);
+						Physics.Raycast(ray, out hit, dir.magnitude, layerToCastOn);
+						if (!hit.collider)
+							++numSeen;
+					}
 				}
 			}
+
+			float iVal = numSeen / 300.0f;
+			currentCell.SetVisibilityInfluenceValue(iVal <= 1.0f ? iVal : 1.0f);
 		}
 	}
 }
@@ -677,14 +790,14 @@ public class NavMesh_CellGenerator : MonoBehaviour
     public List<Triangle> NavMeshTris = new List<Triangle>();   // All Triangles on the NavMesh in the scene
     public float PoissonTolerance = 0.5f;                       // What is the minimum distance apart each poisson point should be
     public float LineWidth = 0.01f;                             // How wide to draw all the lines in the scene
-    public SortedCellList CellList;                         // List of all existing CellList within the scene -- will be used for the influence map calculations
+    public SortedCellList CellList;								// List of all existing CellList within the scene -- will be used for the influence map calculations
 	public InfluenceMode Mode = InfluenceMode.Propagation;		// Current mode for the influence map
 	public float DecayFactor = 0.2f;							// Decay factor for propagation formula
 	public float GrowthFactor = 0.3f;                           // Growth factor for propagation formula
 	public float MaxFadeTimer = 4.0f;							// How many seconds it'll take for a given cell to fade it's influence from 1 to 0, value cannot be 0
 	public bool ShouldRenderNeighborLines = false;              // Determines whether or not voronoi neighbor lines should be rendered
-	public float VerticalOffset = 0.15f;
-	Vector3 verticalOffsetFinal;
+	public float VerticalOffset = 0.15f;						
+	Vector3 verticalOffsetFinal;								
 	public float StepTime = 0.1f;                               // How long between propagation calculations
 	float CurrentTime = 0.0f;                                   // Timer for tracking propagation step time
 
@@ -732,7 +845,9 @@ public class NavMesh_CellGenerator : MonoBehaviour
 
             if (!tooClose)
             {
-                CellList.AddCell(new Cell(point, transform.rotation, PoissonDotPrefab, this));
+				Cell newCell = new Cell(point, transform.rotation, PoissonDotPrefab, this);
+				triangle.poissonCells.Add(newCell);
+				CellList.AddCell(newCell);
                 pointsFinal.Add(point);
             }
         }
@@ -780,7 +895,7 @@ public class NavMesh_CellGenerator : MonoBehaviour
 
     void GetNeighbors(Cell cell)
     {
-        Pair<int, int> bounds = CellList.GetRange(cell.site, PoissonTolerance * 10);
+        Pair<int, int> bounds = CellList.GetRange(cell.site, PoissonTolerance * 2.5f);
 
         if (bounds.first == bounds.second)
         {
@@ -794,8 +909,8 @@ public class NavMesh_CellGenerator : MonoBehaviour
         List<Cell> allCells = new List<Cell>(bounds.second - bounds.first);
         for (int i = bounds.first; i < bounds.second; ++i)
         {
-            float dist = Vector3.Distance(cell.site, CellList.GetCell(i).site);
-            if (dist < PoissonTolerance || Mathf.Abs(cell.site.y - CellList.GetCell(i).site.y) > PoissonTolerance)
+			float dist = Vector3.Distance(cell.site, CellList.GetCell(i).site);
+			if (dist < PoissonTolerance || Mathf.Abs(cell.site.y - CellList.GetCell(i).site.y) > PoissonTolerance)
             {
                 continue;
             }
@@ -962,6 +1077,7 @@ public class NavMesh_CellGenerator : MonoBehaviour
 	// Use this for initialization
 	void Start()
     {
+		UnityEngine.Random.InitState(0);
 		verticalOffsetFinal = Vector3.up * VerticalOffset;
 		CellList = new SortedCellList();
 		/// Cycling through all child objects, finding OffMeshLinks
@@ -1006,10 +1122,13 @@ public class NavMesh_CellGenerator : MonoBehaviour
 		CellList.RaiseCells(verticalOffsetFinal);
 		CellList.AssignIndices();
 		CellList.FindWallInfluence(GameObject.FindGameObjectsWithTag("Wall"));
+		//CellList.FindVisibilityInfluence(NavMeshTris);
 		InfluenceMapModeText.GetComponent<ModeUI>().ModeChange(Mode);
 
 		if (Mode == InfluenceMode.OpennessClosestWall)
 			CellList.ApplyWallInfluences();
+		else if (Mode == InfluenceMode.VisibleToSpot)
+			CellList.ApplyVisibilityInfluences();
 	}
 
     // Update is called once per frame
@@ -1050,6 +1169,8 @@ public class NavMesh_CellGenerator : MonoBehaviour
 
 			if (Mode == InfluenceMode.OpennessClosestWall)
 				CellList.ApplyWallInfluences();
+			else if (Mode == InfluenceMode.VisibleToSpot)
+				CellList.ApplyVisibilityInfluences();
 		}
 		if (Input.GetKeyUp(KeyCode.RightBracket))
 		{
@@ -1059,6 +1180,8 @@ public class NavMesh_CellGenerator : MonoBehaviour
 
 			if (Mode == InfluenceMode.OpennessClosestWall)
 				CellList.ApplyWallInfluences();
+			else if (Mode == InfluenceMode.VisibleToSpot)
+				CellList.ApplyVisibilityInfluences();
 		}
 	}
 }

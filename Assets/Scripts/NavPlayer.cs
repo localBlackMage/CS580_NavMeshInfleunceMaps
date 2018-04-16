@@ -48,7 +48,7 @@ public class NavPlayer : MonoBehaviour {
 			right.y = 0.0f;
 
 			transform.position += forward * normalMoveSpeed * Input.GetAxis("Horizontal") * Time.deltaTime;
-			transform.position += right * normalMoveSpeed * -Input.GetAxis("Vertical") * Time.deltaTime;
+			transform.position += right * normalMoveSpeed * Input.GetAxis("Vertical") * Time.deltaTime;
 
 			if (Input.GetKey(KeyCode.E)) { transform.position += transform.up * climbSpeed * Time.deltaTime; }
 			if (Input.GetKey(KeyCode.Q)) { transform.position -= transform.up * climbSpeed * Time.deltaTime; }
