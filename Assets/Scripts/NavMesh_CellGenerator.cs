@@ -69,9 +69,9 @@ public class Cell
 	private void ColorDot()
 	{
 		if (influenceValue < 0.0f)
-			dotRenderer.material.SetColor("_Color", LerpColor(Math.Abs(influenceValue), Color.green));
+			dotRenderer.material.SetColor("_Color", LerpColor(Math.Abs(influenceValue), Color.red));
 		else
-			dotRenderer.material.SetColor("_Color", LerpColor(influenceValue, Color.red));
+			dotRenderer.material.SetColor("_Color", LerpColor(influenceValue, Color.green));
 	}
 
 	/// <summary>
@@ -780,11 +780,10 @@ public class SortedCellList
 	{
 		int layerToCastOn = LayerMask.GetMask("BlockVisibility");
 		Vector3 verticalOffsetAmount = Vector3.up * 0.5f;
-		//RaycastHit hit;
-		//Vector3 dir;
-		//Ray ray;
-		
-		foreach (Cell currentCell in cells)
+        float halfCells = (float)(cells.Count) / 2.0f;
+
+
+        foreach (Cell currentCell in cells)
 		{
 			Vector3 currCellPos = currentCell.GetTransform().position + verticalOffsetAmount;
 			float numSeen = 0.0f;
@@ -794,22 +793,9 @@ public class SortedCellList
                 // This is a rough approximation of how many cells are seen, ray casting to each individually is too
                 // slow and CPU consuming
                 numSeen += tri.CalculateHowMuchOfTriangleIsSeen(currCellPos, layerToCastOn);
-				//if (tri.CanSeeTriangle(currCellPos, layerToCastOn))
-				//{
-				//	List<Cell> triCells = tri.GetCells();
-				//	foreach (Cell cell in triCells)
-				//	{
-				//		if (cell.GetIndex() == currentCell.GetIndex()) continue;
-				//		dir = cell.GetTransform().position - currCellPos;
-				//		ray = new Ray(currCellPos, dir);
-				//		Physics.Raycast(ray, out hit, dir.magnitude, layerToCastOn);
-				//		if (!hit.collider)
-				//			++numSeen;
-				//	}
-				//}
 			}
             
-			float iVal = numSeen / cells.Count;
+			float iVal = numSeen / halfCells;
 			currentCell.SetVisibilityInfluenceValue(iVal <= 1.0f ? iVal : 1.0f);
 		}
 	}
@@ -1170,8 +1156,8 @@ public class NavMesh_CellGenerator : MonoBehaviour
         }
 		CellList.RaiseCells(verticalOffsetFinal);
 		CellList.AssignIndices();
-		//CellList.FindWallInfluence(GameObject.FindGameObjectsWithTag("Wall"));
-        //CellList.FindVisibilityInfluence(NavMeshTris);
+        CellList.FindWallInfluence(GameObject.FindGameObjectsWithTag("Wall"));
+        CellList.FindVisibilityInfluence(NavMeshTris);
         InfluenceMapModeText.GetComponent<ModeUI>().ModeChange(Mode);
 
 		if (Mode == InfluenceMode.OpennessClosestWall)

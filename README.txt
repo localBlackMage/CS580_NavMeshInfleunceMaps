@@ -11,3 +11,4 @@ General Controls
 [ - Previous Analysis Mode
 ] - Next Analysis Mode
 N - Toggle Voronoi Neighbor Lines
+M - Toggle Voronoi Neighbor Lines
