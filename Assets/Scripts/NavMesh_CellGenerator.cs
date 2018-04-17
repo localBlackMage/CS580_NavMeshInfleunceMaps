@@ -1170,8 +1170,8 @@ public class NavMesh_CellGenerator : MonoBehaviour
         }
 		CellList.RaiseCells(verticalOffsetFinal);
 		CellList.AssignIndices();
-		CellList.FindWallInfluence(GameObject.FindGameObjectsWithTag("Wall"));
-        CellList.FindVisibilityInfluence(NavMeshTris);
+		//CellList.FindWallInfluence(GameObject.FindGameObjectsWithTag("Wall"));
+        //CellList.FindVisibilityInfluence(NavMeshTris);
         InfluenceMapModeText.GetComponent<ModeUI>().ModeChange(Mode);
 
 		if (Mode == InfluenceMode.OpennessClosestWall)
