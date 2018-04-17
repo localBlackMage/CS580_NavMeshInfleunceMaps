@@ -69,7 +69,7 @@ public class Cell
 	private void ColorDot()
 	{
 		if (influenceValue < 0.0f)
-			dotRenderer.material.SetColor("_Color", LerpColor(Math.Abs(influenceValue), Color.blue));
+			dotRenderer.material.SetColor("_Color", LerpColor(Math.Abs(influenceValue), Color.green));
 		else
 			dotRenderer.material.SetColor("_Color", LerpColor(influenceValue, Color.red));
 	}
@@ -291,6 +291,7 @@ public class Triangle
 	public GameObject dotPrefab;        // Prefab for the object used to display Voronoi site locations
 	public GameObject linePrefab;       // 
 	public float lineWidth;             //
+    float cellCount3rd;                 // One third of all cells in poissonCells, precalculated for speed
 
 	/// <summary>
 	/// Spawn a Line prefab and orient it's box collider properly
@@ -412,6 +413,37 @@ public class Triangle
 	{
 		return poissonCells;
 	}
+
+    public void CountCells()
+    {
+        cellCount3rd = (float)(poissonCells.Count) / 3.0f;
+    }
+
+    public float CalculateHowMuchOfTriangleIsSeen(Vector3 pos, int layerToCastOn)
+    {
+        float numVertsSeen = 0.0f;
+        RaycastHit hit;
+
+        Vector3 dir = v1 - pos;
+        Ray ray = new Ray(pos, dir);
+        Physics.Raycast(ray, out hit, dir.magnitude, layerToCastOn);
+        if (!hit.collider)
+            ++numVertsSeen;
+
+        dir = v2 - pos;
+        ray = new Ray(pos, dir);
+        Physics.Raycast(ray, out hit, dir.magnitude, layerToCastOn);
+        if (!hit.collider)
+            ++numVertsSeen;
+
+        dir = v3 - pos;
+        ray = new Ray(pos, dir);
+        Physics.Raycast(ray, out hit, dir.magnitude, layerToCastOn);
+        if (!hit.collider)
+            ++numVertsSeen;
+
+        return numVertsSeen * cellCount3rd;
+    }
 }
 
 /// <summary>
@@ -748,9 +780,9 @@ public class SortedCellList
 	{
 		int layerToCastOn = LayerMask.GetMask("BlockVisibility");
 		Vector3 verticalOffsetAmount = Vector3.up * 0.5f;
-		RaycastHit hit;
-		Vector3 dir;
-		Ray ray;
+		//RaycastHit hit;
+		//Vector3 dir;
+		//Ray ray;
 		
 		foreach (Cell currentCell in cells)
 		{
@@ -759,22 +791,25 @@ public class SortedCellList
 
 			foreach(Triangle tri in tris)
 			{
-				if (tri.CanSeeTriangle(currCellPos, layerToCastOn))
-				{
-					List<Cell> triCells = tri.GetCells();
-					foreach (Cell cell in triCells)
-					{
-						if (cell.GetIndex() == currentCell.GetIndex()) continue;
-						dir = cell.GetTransform().position - currCellPos;
-						ray = new Ray(currCellPos, dir);
-						Physics.Raycast(ray, out hit, dir.magnitude, layerToCastOn);
-						if (!hit.collider)
-							++numSeen;
-					}
-				}
+                // This is a rough approximation of how many cells are seen, ray casting to each individually is too
+                // slow and CPU consuming
+                numSeen += tri.CalculateHowMuchOfTriangleIsSeen(currCellPos, layerToCastOn);
+				//if (tri.CanSeeTriangle(currCellPos, layerToCastOn))
+				//{
+				//	List<Cell> triCells = tri.GetCells();
+				//	foreach (Cell cell in triCells)
+				//	{
+				//		if (cell.GetIndex() == currentCell.GetIndex()) continue;
+				//		dir = cell.GetTransform().position - currCellPos;
+				//		ray = new Ray(currCellPos, dir);
+				//		Physics.Raycast(ray, out hit, dir.magnitude, layerToCastOn);
+				//		if (!hit.collider)
+				//			++numSeen;
+				//	}
+				//}
 			}
-
-			float iVal = numSeen / 300.0f;
+            
+			float iVal = numSeen / cells.Count;
 			currentCell.SetVisibilityInfluenceValue(iVal <= 1.0f ? iVal : 1.0f);
 		}
 	}
@@ -800,6 +835,7 @@ public class NavMesh_CellGenerator : MonoBehaviour
 	Vector3 verticalOffsetFinal;								
 	public float StepTime = 0.1f;                               // How long between propagation calculations
 	float CurrentTime = 0.0f;                                   // Timer for tracking propagation step time
+    List<LineRenderer> VoronoiNeighborLines;                    // List of all line renderers for the Voronoi neighbors
 
 	/// <summary>
 	/// Given a Triangle and a tolerance, the triangle's CellList member will be 
@@ -845,12 +881,14 @@ public class NavMesh_CellGenerator : MonoBehaviour
 
             if (!tooClose)
             {
-				Cell newCell = new Cell(point, transform.rotation, PoissonDotPrefab, this);
-				triangle.poissonCells.Add(newCell);
-				CellList.AddCell(newCell);
+                Cell newCell = new Cell(point, transform.rotation, PoissonDotPrefab, this);
+                triangle.poissonCells.Add(newCell);
+                CellList.AddCell(newCell);
                 pointsFinal.Add(point);
             }
         }
+
+        triangle.CountCells();
     }
 
     bool PointWithinTriangleCircumference(Vector3 p1, Vector3 p2, Vector3 p3, Vector3 v)
@@ -1047,7 +1085,9 @@ public class NavMesh_CellGenerator : MonoBehaviour
             lineRenderer.enabled = ShouldRenderNeighborLines;
             lineRenderer.widthMultiplier = LineWidth;
             lineRenderer.endWidth = LineWidth / 4;
-            cell.adjacentCells.Add(new Pair<Cell, float>(c, Vector3.Distance(c.site, cell.site))); //Add
+            cell.adjacentCells.Add(new Pair<Cell, float>(c, Vector3.Distance(c.site, cell.site)));
+
+            VoronoiNeighborLines.Add(lineRenderer);
         }
     }
 
@@ -1074,23 +1114,32 @@ public class NavMesh_CellGenerator : MonoBehaviour
 		}
 	}
 
+    public void ToggleVoronoiNeighborLines()
+    {
+        foreach (LineRenderer line in VoronoiNeighborLines)
+        {
+            line.enabled = ShouldRenderNeighborLines;
+        }
+    }
+
 	// Use this for initialization
 	void Start()
     {
 		UnityEngine.Random.InitState(0);
 		verticalOffsetFinal = Vector3.up * VerticalOffset;
 		CellList = new SortedCellList();
-		/// Cycling through all child objects, finding OffMeshLinks
-		/// Hope is to connect our Cells together via the OffMeshLinks
-		//foreach (Transform child in transform)
-		//{
-		//	OffMeshLink offMeshLink = child.GetComponent<OffMeshLink>();
-		//	if (offMeshLink && offMeshLink.enabled)
-		//	{
-		//		NavMesh.areas
-		//		offMeshLink.area
-		//	}
-		//}
+        VoronoiNeighborLines = new List<LineRenderer>();
+        /// Cycling through all child objects, finding OffMeshLinks
+        /// Hope is to connect our Cells together via the OffMeshLinks
+        //foreach (Transform child in transform)
+        //{
+        //	OffMeshLink offMeshLink = child.GetComponent<OffMeshLink>();
+        //	if (offMeshLink && offMeshLink.enabled)
+        //	{
+        //		NavMesh.areas
+        //		offMeshLink.area
+        //	}
+        //}
 
         // Get all NavMesh information
         NavMeshTriangulation tris = NavMesh.CalculateTriangulation();
@@ -1098,7 +1147,7 @@ public class NavMesh_CellGenerator : MonoBehaviour
         // Spawn vertex prefabs at the vertices of the NavMesh
         foreach (Vector3 vert in tris.vertices)
         {
-            Instantiate(NavMeshVertPrefab, vert, transform.rotation);
+            Instantiate(NavMeshVertPrefab, vert + verticalOffsetFinal, transform.rotation);
         }
 
         // Using the indicies of the NavMesh, create Triangles and call PoissonDiscDistribution with it to create
@@ -1122,8 +1171,8 @@ public class NavMesh_CellGenerator : MonoBehaviour
 		CellList.RaiseCells(verticalOffsetFinal);
 		CellList.AssignIndices();
 		CellList.FindWallInfluence(GameObject.FindGameObjectsWithTag("Wall"));
-		//CellList.FindVisibilityInfluence(NavMeshTris);
-		InfluenceMapModeText.GetComponent<ModeUI>().ModeChange(Mode);
+        CellList.FindVisibilityInfluence(NavMeshTris);
+        InfluenceMapModeText.GetComponent<ModeUI>().ModeChange(Mode);
 
 		if (Mode == InfluenceMode.OpennessClosestWall)
 			CellList.ApplyWallInfluences();
@@ -1183,5 +1232,10 @@ public class NavMesh_CellGenerator : MonoBehaviour
 			else if (Mode == InfluenceMode.VisibleToSpot)
 				CellList.ApplyVisibilityInfluences();
 		}
-	}
+        if (Input.GetKeyUp(KeyCode.N))
+        {
+            ShouldRenderNeighborLines = !ShouldRenderNeighborLines;
+            ToggleVoronoiNeighborLines();
+        }
+    }
 }

@@ -4,7 +4,9 @@
 [Bb]uild/
 [Bb]uilds/
 CS580_Navmesh_InfluenceMaps_Data/
+CS580_NavMeshInfleunceMaps_Data/
 CS580_Navmesh_InfluenceMaps.exe
+CS580_NavMeshInfleunceMaps.exe
 UnityPlayer.dll
 Assets/AssetStoreTools*
 
