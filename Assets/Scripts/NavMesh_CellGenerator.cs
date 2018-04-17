@@ -1061,10 +1061,10 @@ public class NavMesh_CellGenerator : MonoBehaviour
             for (int i = 0; i < samples; ++i)
             {
                 linePositions[i] = Vector3.Lerp(cell.site, c.site, (float)i / (samples - 1));
-                NavMeshHit hit;
-                NavMesh.SamplePosition(linePositions[i], out hit, 100, -1);
-				//float angle = nearestAngle - (Vector3.SignedAngle(Vector3.right, c.site - cell.site, Vector3.up) + 180);
-				linePositions[i] = hit.position + verticalOffsetFinal;
+                //NavMeshHit hit;
+                //NavMesh.SamplePosition(linePositions[i], out hit, 100, -1);
+				////float angle = nearestAngle - (Vector3.SignedAngle(Vector3.right, c.site - cell.site, Vector3.up) + 180);
+				//linePositions[i] = hit.position + verticalOffsetFinal;
             }
             lineRenderer.SetPositions(linePositions);
 
